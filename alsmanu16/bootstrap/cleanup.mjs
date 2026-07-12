@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * تنظيف آمن لمخلفات هذا البوت فقط.
- * المعاينة: node bootstrap/cleanup.mjs --dry-run
- * التنفيذ:  node bootstrap/cleanup.mjs --confirm CLEAN_BOT
- * مسح بيانات runtime أيضاً: أضف --purge-data --confirm-data DELETE_BOT_DATA
+ * تنظيف مخلفات هذا البوت (كاش + بيانات runtime).
+ * التشغيل المباشر: node bootstrap/cleanup.mjs
+ *   يحذف كل شيء فوراً بدون أي تأكيد أو وسائط إضافية.
+ * المعاينة فقط (اختياري): node bootstrap/cleanup.mjs --dry-run
  */
 import { existsSync, readdirSync, realpathSync, rmSync, statSync } from "fs";
 import { dirname, join, relative, resolve, sep } from "path";
@@ -11,9 +11,10 @@ import { fileURLToPath } from "url";
 
 const BASE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dryRun = process.argv.includes("--dry-run");
-const purgeData = process.argv.includes("--purge-data");
-const confirm = process.argv.includes("--confirm") && process.argv.includes("CLEAN_BOT");
-const confirmData = process.argv.includes("--confirm-data") && process.argv.includes("DELETE_BOT_DATA");
+// [CLEANUP-SIMPLE] التشغيل بدون وسائط = حذف كامل (كاش + بيانات) بدون تأكيد
+const purgeData = true;
+const confirm = true;
+const confirmData = true;
 
 const CACHE_TARGETS = [
   ".runtime",
