@@ -13,7 +13,8 @@
  */
 
 import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
 import { join } from "path";
 import { ok, wrn, section } from "../core/logger.mjs";
 
@@ -38,17 +39,40 @@ function ensureNodeModules(baseDir) {
 
   wrn("node_modules: غائب — جارٍ npm install...");
   try {
-    execSync("npm install --no-package-lock 2>&1 | tail -5", {
+    execSync("npm install --no-package-lock --no-audit --no-fund --prefer-offline 2>&1 | tail -5", {
       stdio: "inherit",
       cwd:   baseDir,
       timeout: 180_000,
     });
+    writeDepStamp(baseDir);
+    cleanNpmCache(baseDir);
     ok("تم تثبيت الحزم بنجاح");
     return true;
   } catch {
     wrn("فشل npm install — سأحاول تثبيت الحزم الحرجة منفردة");
     return false;
   }
+}
+
+// ── بصمة التبعيات المشتركة (نفس الملف الذي تقرأه deploy.mjs و startup) ─
+function depFingerprint(baseDir) {
+  const h = createHash("sha256");
+  for (const n of ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]) {
+    const f = join(baseDir, n);
+    if (existsSync(f)) h.update(n).update(readFileSync(f));
+  }
+  return h.digest("hex");
+}
+
+function writeDepStamp(baseDir) {
+  try {
+    writeFileSync(join(baseDir, "node_modules", ".deps.sha256"), depFingerprint(baseDir));
+  } catch {}
+}
+
+function cleanNpmCache(baseDir) {
+  // كاش npm ينمو مع الوقت ويملأ التخزين — ننظّفه بعد كل تثبيت ناجح
+  try { execSync("npm cache clean --force 2>/dev/null", { cwd: baseDir, timeout: 60_000 }); } catch {}
 }
 
 // ── التحقق من الحزم الحرجة وتثبيت الناقص ────────────────────
@@ -65,9 +89,11 @@ function ensureCriticalPackages(baseDir) {
   wrn(`حزم ناقصة: ${missing.join(", ")} — جارٍ التثبيت...`);
   try {
     execSync(
-      `npm install --no-package-lock ${missing.join(" ")} 2>&1 | tail -3`,
+      `npm install --no-package-lock --no-audit --no-fund --prefer-offline ${missing.join(" ")} 2>&1 | tail -3`,
       { stdio: "inherit", cwd: baseDir, timeout: 120_000 }
     );
+    writeDepStamp(baseDir);
+    cleanNpmCache(baseDir);
     ok("تم تثبيت الحزم الناقصة");
   } catch (e) {
     wrn("فشل تثبيت بعض الحزم: " + (e.message?.slice(0, 80) ?? ""));

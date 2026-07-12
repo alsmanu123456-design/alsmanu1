@@ -152,7 +152,7 @@ export const MYMSGS_CATEGORIES = {
   },
   services: {
     icon: "\uD83C\uDF10", name: "\u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0648\u062E\u062F\u0645\u0627\u062A",
-    features: ["weather", "translate", "wiki", "prayer", "currency", "news", "joke", "fortune", "locate"],
+    features: ["translate", "wiki", "news", "joke", "locate"],
   },
   voice: {
     icon: "\uD83C\uDFA4", name: "\u0627\u0644\u0635\u0648\u062A",
@@ -297,7 +297,7 @@ export function myMsgsFeatureSubMenu(s, feature) {
     locate:   `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd} +\u0631\u0645\u0632\u0627\u0644\u062F\u0648\u0644\u0629\u0627\u0644\u0631\u0642\u0645\` \u0644\u062A\u062A\u0628\u0639 \u0645\u0648\u0642\u0639 \u0627\u0644\u0631\u0642\u0645.\n\u270F\uFE0F \u0645\u062B\u0627\u0644: \`${feat.cmd} +966501234567\`\n\u{1F512} \u064A\u0639\u0631\u0636 \u0627\u0644\u0645\u0648\u0642\u0639 + \u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0627\u0644\u0634\u0628\u0643\u0629 \u0648\u0627\u0644\u062F\u0648\u0644\u0629`,
   };
   const _featDesc = _featureDescs[feature] || "";
-  // [MSGS-REBUILD] زر رجوع ذكي: يعود لفئة الميزة إن وُجدت، وإلا للقائمة الرئيسية
+  // [MSGS-REBUILD] زر رجوع ذكي: يعود لفئة الميزة إن وُجدت، وإلا للقائمة ال��ئيسية
   const _cat = _categoryOfFeature(feature);
   const _backBtn = _cat
     ? { text: `\u25C0\uFE0F \u0631\u062C\u0648\u0639 \u0644\u0640 ${MYMSGS_CATEGORIES[_cat].name}`, callback_data: `mymsgs_cat_${_cat}` }

@@ -21,6 +21,51 @@ function guessExt(mimetype) {
  * @param {{ mimetype?: string, language?: string }} opts
  * @returns {Promise<{ ok: true, text: string, segments: any[] } | { ok: false, error: string }>}
  */
+// محاولة واحدة لطلب التفريغ — تُعيد إمّا نتيجة نهائية أو تُطلق خطأً قابلاً لإعادة المحاولة
+async function _sttAttempt(audioBuffer, ext, mimetype, language) {
+  const form = new FormData();
+  const blob = new Blob([audioBuffer], { type: mimetype || `audio/${ext}` });
+  form.append('audio', blob, `capture.${ext}`);
+  form.append('language', language);
+  form.append('diarization', 'false');
+  form.append('durationSec', '0');
+
+  const headers = {
+    'User-Agent': BROWSER_UA,
+    'Referer': `${BASE_URL}/`,
+    'Origin': BASE_URL,
+  };
+
+  // مهلة صارمة لكل محاولة حتى لا تتعلّق الطلبات المعطّلة إلى ما لا نهاية
+  const res = await fetch(`${BASE_URL}/api/speech-to-text`, {
+    method: 'POST',
+    headers,
+    body: form,
+    signal: AbortSignal.timeout(90000),
+  });
+
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => null);
+    const msg = errJson?.error || errJson?.detail?.error || `HTTP ${res.status}`;
+    const err = new Error(msg);
+    // 5xx و 429 و 408 قابلة لإعادة المحاولة؛ غيرها أخطاء نهائية
+    err._retryable = res.status >= 500 || res.status === 429 || res.status === 408;
+    throw err;
+  }
+
+  const json = await res.json();
+  return String(json?.transcript || '').trim();
+}
+
+/**
+ * يحوّل صوتاً (Buffer) إلى نص عبر FreeTTS.org مع كشف اللغة تلقائياً.
+ * موثوقية عالية: يعيد المحاولة حتى 4 مرات مع تصاعد زمني (backoff) عند
+ * أخطاء الشبكة أو الأخطاء المؤقتة (5xx/429/408). هذا يضمن نجاح التفريغ
+ * على الملفات الطويلة (المقسّمة لعدة أجزاء) حتى لو تعثّر جزء مؤقتاً.
+ * @param {Buffer} audioBuffer
+ * @param {{ mimetype?: string, language?: string }} opts
+ * @returns {Promise<{ ok: true, text: string, segments: any[] } | { ok: false, error: string }>}
+ */
 export async function speechToText(audioBuffer, opts = {}) {
   if (!audioBuffer || !audioBuffer.length) {
     return { ok: false, error: 'لا يوجد صوت لتحويله' };
@@ -28,38 +73,28 @@ export async function speechToText(audioBuffer, opts = {}) {
 
   const ext = guessExt(opts.mimetype);
   const language = opts.language || 'auto';
+  const MAX_ATTEMPTS = 4;
+  let lastErr = 'سبب غير معروف';
 
-  try {
-    const form = new FormData();
-    const blob = new Blob([audioBuffer], { type: opts.mimetype || `audio/${ext}` });
-    form.append('audio', blob, `capture.${ext}`);
-    form.append('language', language);
-    form.append('diarization', 'false');
-    form.append('durationSec', '0');
-
-    const headers = {
-      'User-Agent': BROWSER_UA,
-      'Referer': `${BASE_URL}/`,
-      'Origin': BASE_URL,
-    };
-    let res = await fetch(`${BASE_URL}/api/speech-to-text`, { method: 'POST', headers, body: form });
-    if (!res.ok && res.status >= 500) {
-      await new Promise((r) => setTimeout(r, 1200));
-      res = await fetch(`${BASE_URL}/api/speech-to-text`, { method: 'POST', headers, body: form });
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const text = await _sttAttempt(audioBuffer, ext, opts.mimetype, language);
+      if (!text) {
+        // نص فارغ: قد يكون المقطع صامتاً فعلاً — لا فائدة من إعادة المحاولة
+        return { ok: false, error: 'لم يتم التعرف على أي كلام في هذا المقطع' };
+      }
+      return { ok: true, text, segments: [] };
+    } catch (e) {
+      lastErr = String(e?.message || e);
+      // خطأ نهائي (4xx غير قابل لإعادة المحاولة) — أوقف فوراً
+      if (e && e._retryable === false && !/fetch|network|timeout|aborted/i.test(lastErr)) {
+        return { ok: false, error: `فشل تحويل الصوت لنص: ${lastErr}` };
+      }
+      // خطأ مؤقت أو شبكة — أعد المحاولة مع backoff تصاعدي
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, attempt * 1500));
+      }
     }
-
-    if (!res.ok) {
-      const errJson = await res.json().catch(() => null);
-      const msg = errJson?.error || errJson?.detail?.error || `HTTP ${res.status}`;
-      return { ok: false, error: `فشل تحويل الصوت لنص: ${msg}` };
-    }
-
-    const json = await res.json();
-    const text = String(json?.transcript || '').trim();
-    if (!text) return { ok: false, error: 'لم يتم التعرف على أي كلام في الرسالة الصوتية' };
-
-    return { ok: true, text, segments: Array.isArray(json?.segments) ? json.segments : [] };
-  } catch (e) {
-    return { ok: false, error: `خطأ شبكة: ${String(e?.message || e)}` };
   }
+  return { ok: false, error: `فشل تحويل الصوت لنص بعد ${MAX_ATTEMPTS} محاولات: ${lastErr}` };
 }

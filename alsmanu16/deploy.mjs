@@ -148,20 +148,56 @@ async function downloadFromGitHub(ghToken) {
   ok("تم تحميل جميع الملفات");
 }
 
+// ── بصمة التبعيات (تمنع إعادة التثبيت بلا داعٍ) ───────────────
+// نحسب hash لملفات التعريف (package.json + ملفات القفل). طالما البصمة
+// لم تتغير و node_modules سليم، لا نُعيد التثبيت أبداً — هذا يمنع
+// امتلاء التخزين بتثبيتات متكررة عند كل تشغيل/إعادة تشغيل.
+const CRITICAL_DEPS = ["node-telegram-bot-api", "@whiskeysockets/baileys", "sharp"];
+
+function depFingerprint() {
+  const h = _ch("sha256");
+  for (const name of ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]) {
+    const f = path.join(__dirname, name);
+    if (fs.existsSync(f)) h.update(name).update(fs.readFileSync(f));
+  }
+  return h.digest("hex");
+}
+
+function depsSatisfied() {
+  const nmPath = path.join(__dirname, "node_modules");
+  if (!fs.existsSync(nmPath)) return false;
+  // كل الحزم الحرجة موجودة فعلاً؟
+  for (const p of CRITICAL_DEPS) {
+    if (!fs.existsSync(path.join(nmPath, p))) return false;
+  }
+  // البصمة مطابقة؟
+  const stamp = path.join(nmPath, ".deps.sha256");
+  if (!fs.existsSync(stamp)) return false;
+  return fs.readFileSync(stamp, "utf8").trim() === depFingerprint();
+}
+
 // ── تثبيت مكتبات npm ─────────────────────────────────────────
 function installDeps() {
   const pkgPath = path.join(__dirname, "package.json");
   const nmPath  = path.join(__dirname, "node_modules");
   if (!fs.existsSync(pkgPath)) { wrn("package.json غير موجود — تخطي npm install"); return; }
-  if (fs.existsSync(nmPath) && !process.argv.includes("--update")) {
-    ok("node_modules موجود — تخطي التثبيت");
+
+  // تخطٍّ ذكي: التبعيات مكتملة والبصمة مطابقة → لا تثبيت
+  if (depsSatisfied() && !process.argv.includes("--update")) {
+    ok("التبعيات ثابتة (نفس البصمة) — تخطي التثبيت");
     return;
   }
+
   inf("تثبيت مكتبات npm (قد يستغرق دقيقتين)...");
   try {
-    execSync("npm install --no-package-lock 2>&1 | tail -5", {
+    // --no-audit/--no-fund/--prefer-offline: أسرع وأقل استهلاكاً للتخزين والشبكة
+    execSync("npm install --no-package-lock --no-audit --no-fund --prefer-offline 2>&1 | tail -5", {
       stdio: "inherit", cwd: __dirname, timeout: 300000,
     });
+    // اكتب البصمة بعد نجاح التثبيت حتى لا نُعيده مرة أخرى
+    try { fs.writeFileSync(path.join(nmPath, ".deps.sha256"), depFingerprint()); } catch {}
+    // نظّف كاش npm لمنع تضخّم التخزين مع الوقت
+    try { execSync("npm cache clean --force 2>/dev/null", { cwd: __dirname, timeout: 60000 }); } catch {}
     ok("تم تثبيت المكتبات");
   } catch(e) {
     wrn("فشل npm install: " + e.message);

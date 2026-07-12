@@ -1,0 +1,315 @@
+// ════════════════════════════════════════════════════════════════════
+//  ميزة /get — سحب أرقام أعضاء مجموعة وإضافتهم لمجموعة أخرى
+//  (مدفوعة: اشتراك النخبة khariqpro)
+//
+//  الأوامر (تُرسَل من رقم المالك fromMe داخل واتساب):
+//    /get 50        → اسحب حتى 50 رقماً من أعضاء المجموعة الحالية واحفظها
+//    /get me        → أضِف الأرقام المحفوظة إلى المجموعة الحالية
+//                     (≤50 دفعة واحدة، >50 على دفعات 15 عضو كل ساعتين)
+//    /get del       → احذف الأرقام المحفوظة
+//    /get           → اعرض دليل التعليمات
+//
+//  التصميم:
+//    - المخزن يعيش داخل user.getPool  (أرقام نظيفة بلا @)
+//    - مهام الإضافة المجدولة تعيش داخل user.getJobs وتُستعاد عند الإقلاع
+//      (نفس نمط _startCleanSchedule) حتى تنجو من إعادة التشغيل.
+// ════════════════════════════════════════════════════════════════════
+
+// حجم الدفعة والفاصل الزمني للإضافة التدريجية
+export const GET_BATCH_SIZE = 15;
+export const GET_BATCH_INTERVAL_MS = 2 * 60 * 60 * 1000; // ساعتان
+export const GET_INSTANT_LIMIT = 50; // ≤ هذا العدد يُضاف فوراً
+
+// مؤقّتات نشطة في الذاكرة (userId:groupId → intervalId)
+const activeTimers = new Map();
+
+// ── أدوات مساعدة ────────────────────────────────────────────────────
+
+// تطبيع الأرقام: أرقام فقط، تجاهُل معرّفات @lid (لا يمكن إضافتها كجهة اتصال)
+function extractNumbersFromParticipants(participants) {
+  const out = [];
+  const seen = new Set();
+  for (const p of participants || []) {
+    const raw = p?.id || p?.jid || "";
+    if (!raw || raw.endsWith("@lid")) continue; // @lid مجهول الرقم — لا يُضاف
+    const num = String(raw).split("@")[0].replace(/\D/g, "");
+    if (num.length < 8) continue;
+    if (seen.has(num)) continue;
+    seen.add(num);
+    out.push(num);
+  }
+  return out;
+}
+
+function numToJid(num) {
+  return `${String(num).replace(/\D/g, "")}@s.whatsapp.net`;
+}
+
+// ── جلب أعضاء المجموعة الحالية (مع مهلة صارمة وارتداد للكاش) ─────────
+async function fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger) {
+  let participants = [];
+  try {
+    const meta = await Promise.race([
+      sock.groupMetadata(jid),
+      new Promise((r) => setTimeout(() => r(null), 12000)),
+    ]);
+    if (meta) participants = meta.participants || [];
+  } catch (e) {
+    logger?.warn?.({ e: e?.message }, "[/get] groupMetadata failed, trying cache");
+  }
+  if (participants.length === 0) {
+    const cached = (inMemoryDB.groupsCache.get(String(userId)) || []).find((g) => g.id === jid);
+    participants = cached?.participants || [];
+  }
+  return participants;
+}
+
+// ── إضافة دفعة أرقام مع معالجة النتائج ───────────────────────────────
+// يُرجع { added, failed, invites } — invites = أرقام رفضت الإضافة المباشرة
+async function addBatch(sock, groupId, numbers, logger) {
+  const jids = numbers.map(numToJid);
+  let result = [];
+  try {
+    result = await sock.groupParticipantsUpdate(groupId, jids, "add");
+  } catch (e) {
+    logger?.warn?.({ e: e?.message }, "[/get] groupParticipantsUpdate add failed");
+    // فشل جماعي — اعتبر الجميع فاشلين
+    return { added: 0, failed: numbers.length, invites: [] };
+  }
+  let added = 0;
+  let failed = 0;
+  const invites = [];
+  // baileys يُرجع مصفوفة نتائج لكل رقم مع status code
+  for (const r of Array.isArray(result) ? result : []) {
+    const status = String(r?.status || r?.code || "");
+    if (status === "200") added++;
+    else if (status === "403" || status === "409") {
+      // 403: إعدادات الخصوصية تمنع الإضافة المباشرة → يحتاج دعوة
+      // 409: العضو موجود بالفعل
+      if (status === "403") invites.push(r?.jid);
+      failed++;
+    } else failed++;
+  }
+  // إن لم يُرجِع باستيليز تفاصيل، اعتبر النجاح مبدئياً
+  if (added === 0 && failed === 0) added = numbers.length;
+  return { added, failed, invites };
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  المُجدوِل: يضيف دفعة كل GET_BATCH_INTERVAL_MS حتى ينتهي العدد
+// ════════════════════════════════════════════════════════════════════
+function timerKey(userId, groupId) {
+  return `${userId}::${groupId}`;
+}
+
+// يبدأ/يستأنف مهمة إضافة تدريجية لمستخدم/مجموعة
+export function startAddJob(deps, userId, groupId) {
+  const { inMemoryDB, getUser, saveUser, logger } = deps;
+  const key = timerKey(userId, groupId);
+  // امنع ازدواج المؤقّت لنفس المهمة
+  if (activeTimers.has(key)) return;
+
+  const runBatch = async () => {
+    const user = getUser(userId);
+    const jobs = user.getJobs || {};
+    const job = jobs[groupId];
+    if (!job || !Array.isArray(job.remaining) || job.remaining.length === 0) {
+      stopAddJob(userId, groupId, deps);
+      return;
+    }
+    // ابحث عن سوكِت واتساب المرتبط بهذا المستخدم
+    const sock = _resolveSock(inMemoryDB, userId);
+    if (!sock) {
+      logger?.warn?.({ userId }, "[/get] no active sock for scheduled add — will retry next tick");
+      return; // نُبقي المؤقّت؛ ربما عاد الاتصال لاحقاً
+    }
+    const batch = job.remaining.slice(0, GET_BATCH_SIZE);
+    const res = await addBatch(sock, groupId, batch, logger);
+    // أزل الدفعة من المتبقّي (نجحت أو فشلت — لا نعيد المحاولة بلا نهاية)
+    job.remaining = job.remaining.slice(batch.length);
+    job.addedTotal = (job.addedTotal || 0) + res.added;
+    job.lastRunAt = Date.now();
+    jobs[groupId] = job;
+    saveUser(userId, { getJobs: jobs });
+    // أبلِغ المالك في محادثته الخاصة على واتساب
+    try {
+      const selfJid = `${userId}@s.whatsapp.net`;
+      const remaining = job.remaining.length;
+      if (remaining > 0) {
+        await sock.sendMessage(selfJid, {
+          text: `⏳ *مهمة /get*\n✅ أُضيفت دفعة: ${res.added} عضو\n📊 المتبقّي: ${remaining} — الدفعة التالية بعد ساعتين.`,
+        });
+      } else {
+        await sock.sendMessage(selfJid, {
+          text: `🎉 *اكتملت مهمة /get!*\n✅ إجمالي المُضاف: ${job.addedTotal} عضو.`,
+        });
+      }
+    } catch {}
+    // انتهى العدد؟ أوقف المؤقّت ونظّف
+    if (job.remaining.length === 0) {
+      delete jobs[groupId];
+      saveUser(userId, { getJobs: jobs });
+      stopAddJob(userId, groupId, deps);
+    }
+  };
+
+  // شغّل أول دفعة فوراً ثم كرّر كل ساعتين
+  const intervalId = setInterval(runBatch, GET_BATCH_INTERVAL_MS);
+  activeTimers.set(key, intervalId);
+  // أول دفعة تُنفَّذ فوراً (بدون انتظار ساعتين)
+  runBatch().catch((e) => logger?.warn?.({ e: e?.message }, "[/get] first batch failed"));
+}
+
+export function stopAddJob(userId, groupId, deps) {
+  const key = timerKey(userId, groupId);
+  const t = activeTimers.get(key);
+  if (t) { clearInterval(t); activeTimers.delete(key); }
+}
+
+function _resolveSock(inMemoryDB, userId) {
+  const direct = inMemoryDB.sessions.get(String(userId)) || inMemoryDB.sessions.get(Number(userId));
+  if (typeof direct?.groupParticipantsUpdate === "function") return direct;
+  if (typeof direct?.sock?.groupParticipantsUpdate === "function") return direct.sock;
+  for (const [k, v] of inMemoryDB.sessions.entries()) {
+    if (!String(k).startsWith(`${userId}_`)) continue;
+    if (typeof v?.groupParticipantsUpdate === "function") return v;
+    if (typeof v?.sock?.groupParticipantsUpdate === "function") return v.sock;
+  }
+  return null;
+}
+
+// يُستدعى عند إقلاع البوت لإعادة تشغيل كل المهام غير المكتملة
+export function restoreAllAddJobs(deps) {
+  const { getAllUsers, logger } = deps;
+  let restored = 0;
+  try {
+    for (const u of getAllUsers()) {
+      const uid = String(u.telegramId);
+      const jobs = u.getJobs || {};
+      for (const groupId of Object.keys(jobs)) {
+        const job = jobs[groupId];
+        if (job && Array.isArray(job.remaining) && job.remaining.length > 0) {
+          startAddJob(deps, uid, groupId);
+          restored++;
+        }
+      }
+    }
+  } catch (e) {
+    logger?.warn?.({ e: e?.message }, "[/get] restore jobs failed");
+  }
+  if (restored > 0) logger?.info?.({ count: restored }, "[/get] restored scheduled add-jobs on startup");
+  return restored;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  المعالج الرئيسي — يُستدعى من dispatcher واتساب عند مطابقة الأمر
+//  deps: { inMemoryDB, getUser, saveUser, getAllUsers, logger }
+//  ctx:  { sock, userId, jid, isGroup }
+//  arg:  النص بعد "/get" (فارغ = دليل)
+// ════════════════════════════════════════════════════════════════════
+export async function handleGetCommand(deps, ctx, arg) {
+  const { getUser, saveUser, inMemoryDB, logger } = deps;
+  const { sock, userId, jid, isGroup } = ctx;
+  const sub = (arg || "").trim();
+
+  // ── /get بلا وسيط → دليل التعليمات ──────────────────────────────
+  if (sub === "") {
+    await sock.sendMessage(jid, { text: GET_HELP_TEXT });
+    return;
+  }
+
+  // ── /get del → حذف المخزن ───────────────────────────────────────
+  if (sub === "del" || sub === "حذف") {
+    saveUser(userId, { getPool: [] });
+    await sock.sendMessage(jid, { text: "🗑️ تم حذف كل الأرقام المحفوظة." });
+    return;
+  }
+
+  // ── /get me → إضافة الأرقام المحفوظة للمجموعة الحالية ────────────
+  if (sub === "me" || sub === "مي") {
+    if (!isGroup) {
+      await sock.sendMessage(jid, { text: "⚠️ أرسل `/get me` داخل المجموعة التي تريد إضافة الأعضاء إليها." });
+      return;
+    }
+    const user = getUser(userId);
+    const pool = Array.isArray(user.getPool) ? user.getPool.slice() : [];
+    if (pool.length === 0) {
+      await sock.sendMessage(jid, { text: "📭 لا توجد أرقام محفوظة. استخدم `/get 50` في مجموعة أولاً." });
+      return;
+    }
+    // استبعد أعضاء المجموعة الحاليين لتفادي محاولات مكرّرة
+    const existing = new Set(
+      extractNumbersFromParticipants(await fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger))
+    );
+    const toAdd = pool.filter((n) => !existing.has(n));
+    if (toAdd.length === 0) {
+      await sock.sendMessage(jid, { text: "✅ كل الأرقام المحفوظة موجودة بالفعل في هذه المجموعة." });
+      return;
+    }
+
+    // ≤ 50: إضافة فورية دفعة واحدة
+    if (toAdd.length <= GET_INSTANT_LIMIT) {
+      await sock.sendMessage(jid, { text: `➕ جارٍ إضافة ${toAdd.length} عضو...` });
+      // نضيف على دفعات صغيرة (15) لتفادي حظر واتساب حتى في الوضع الفوري
+      let added = 0, invitesAll = [];
+      for (let i = 0; i < toAdd.length; i += GET_BATCH_SIZE) {
+        const batch = toAdd.slice(i, i + GET_BATCH_SIZE);
+        const res = await addBatch(sock, jid, batch, logger);
+        added += res.added;
+        invitesAll = invitesAll.concat(res.invites || []);
+        if (i + GET_BATCH_SIZE < toAdd.length) await new Promise((r) => setTimeout(r, 4000));
+      }
+      const inviteNote = invitesAll.length ? `\n📨 ${invitesAll.length} رقم يحتاج دعوة يدوية (إعدادات خصوصية).` : "";
+      await sock.sendMessage(jid, { text: `✅ تم إضافة ${added} من ${toAdd.length} عضو.${inviteNote}` });
+      return;
+    }
+
+    // > 50: جدولة تدريجية 15 كل ساعتين
+    const jobs = user.getJobs || {};
+    jobs[jid] = { remaining: toAdd, total: toAdd.length, addedTotal: 0, startedAt: Date.now() };
+    saveUser(userId, { getJobs: jobs });
+    const hours = Math.ceil(toAdd.length / GET_BATCH_SIZE) * 2;
+    await sock.sendMessage(jid, {
+      text: `📥 *بدأت مهمة إضافة تدريجية*\n👥 العدد: ${toAdd.length} عضو\n⚙️ الوتيرة: ${GET_BATCH_SIZE} عضو كل ساعتين (لحماية رقمك من الحظر)\n⏱️ المدة التقديرية: ~${hours} ساعة\n\nالدفعة الأولى الآن...`,
+    });
+    startAddJob(deps, userId, jid);
+    return;
+  }
+
+  // ── /get <عدد> → سحب أرقام من المجموعة الحالية وحفظها ────────────
+  const count = parseInt(sub.replace(/\D/g, ""), 10);
+  if (Number.isFinite(count) && count > 0) {
+    if (!isGroup) {
+      await sock.sendMessage(jid, { text: "⚠️ أرسل `/get <عدد>` داخل المجموعة التي تريد سحب الأرقام منها." });
+      return;
+    }
+    const participants = await fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger);
+    const allNums = extractNumbersFromParticipants(participants);
+    if (allNums.length === 0) {
+      await sock.sendMessage(jid, { text: "❌ تعذّر قراءة أعضاء هذه المجموعة." });
+      return;
+    }
+    const picked = allNums.slice(0, count);
+    // ادمج مع المخزن السابق دون تكرار
+    const user = getUser(userId);
+    const prev = Array.isArray(user.getPool) ? user.getPool : [];
+    const merged = Array.from(new Set([...prev, ...picked]));
+    saveUser(userId, { getPool: merged });
+    await sock.sendMessage(jid, {
+      text: `✅ تم سحب ${picked.length} رقم وحفظها.\n📦 إجمالي المحفوظ الآن: ${merged.length} رقم.\n\nاذهب لأي مجموعة أخرى وأرسل \`/get me\` لإضافتهم.`,
+    });
+    return;
+  }
+
+  // وسيط غير مفهوم
+  await sock.sendMessage(jid, { text: GET_HELP_TEXT });
+}
+
+export const GET_HELP_TEXT =
+  "🧩 *أوامر /get* (ميزة النخبة)\n\n" +
+  "• `/get 50` — اسحب 50 رقماً (أو أي عدد) من أعضاء المجموعة الحالية واحفظها.\n" +
+  "• `/get me` — أضِف الأرقام المحفوظة إلى المجموعة الحالية.\n" +
+  "     └ إذا كان العدد ≤ 50 تُضاف فوراً.\n" +
+  "     └ إذا كان أكبر، تُضاف 15 عضو كل ساعتين تلقائياً حتى تكتمل.\n" +
+  "• `/get del` — احذف كل الأرقام المحفوظة.\n\n" +
+  "💡 المهام التدريجية تستمر تلقائياً حتى بعد إعادة تشغيل البوت.";
