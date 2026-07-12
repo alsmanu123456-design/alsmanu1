@@ -233,18 +233,95 @@ async function handleScopeCallbackInternal(bot2, chatId, userId, data) {
 // الدوال المُصدَّرة العامة
 // ─────────────────────────────────────────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [AR-REBUILD 2026-07-12] إعادة بناء قسم الردود التلقائية:
+// - القائمة القديمة كانت 12 صفاً مسطّحاً بلا تصنيف — الآن فئات منظّمة.
+// - أُزيلت 26 نسخة مكررة من كود "حد كل شخص" خلّفها باتش قديم معطوب.
+// - أُصلح حد الـ8 ساعات: كان يُحفظ في الذاكرة فقط ويضيع عند إعادة التشغيل.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// فئات قائمة الردود الجديدة — كل فئة: عنوان + أزرارها
+const AR_CATEGORIES = {
+  manage: {
+    icon: "\uD83D\uDCDD", name: "إدارة الردود",
+    desc: "إضافة، عرض، حذف، تفعيل، بحث ونسخ الردود",
+    rows: [
+      [{ text: "\u2795 إضافة رد جديد", callback_data: "reply_add" }, { text: "\uD83D\uDCCB قائمة الردود", callback_data: "reply_list" }],
+      [{ text: "\uD83D\uDDD1\uFE0F حذف رد", callback_data: "reply_delete" }, { text: "\u25B6\uFE0F تفعيل/تعطيل", callback_data: "reply_toggle" }],
+      [{ text: "\uD83D\uDD0D بحث", callback_data: "reply_search" }, { text: "\uD83D\uDCCB نسخ رد موجود", callback_data: "reply_duplicate" }],
+    ],
+  },
+  style: {
+    icon: "\uD83C\uDFA8", name: "تخصيص الردود",
+    desc: "تفاعلات، تأخير طبيعي، تناوب رسائل، وذكاء اصطناعي",
+    rows: [
+      [{ text: "\uD83D\uDE0A رد بتفاعل (Reaction)", callback_data: "reply_reaction" }],
+      [{ text: "\u23F1\uFE0F تأخير عشوائي", callback_data: "reply_random_delay" }, { text: "\uD83D\uDD04 رسائل متناوبة", callback_data: "reply_rotating" }],
+      [{ text: "\uD83E\uDD16 دليل الذكاء الاصطناعي", callback_data: "reply_ai_guide" }, { text: "\uD83D\uDCDD رفع كود على أجزاء", callback_data: "reply_code_parts" }],
+    ],
+  },
+  limits: {
+    icon: "\u23F3", name: "الحدود والتوقيت",
+    desc: "جدولة أوقات الرد وتحديد عدد مرات الإرسال",
+    rows: [
+      [{ text: "\uD83D\uDCC5 جدول عمل الرد", callback_data: "reply_schedule" }],
+      [{ text: "\uD83D\uDD22 حد أقصى يومي", callback_data: "reply_daily_limit" }, { text: "\uD83D\uDC64 حد لكل شخص / 8س", callback_data: "reply_per_user_limit" }],
+      [{ text: "\uD83D\uDD24 فلتر اللغة", callback_data: "reply_lang_filter" }],
+    ],
+  },
+  data: {
+    icon: "\uD83D\uDCBE", name: "البيانات والإحصائيات",
+    desc: "تصدير واستيراد الردود ومتابعة أدائها",
+    rows: [
+      [{ text: "\uD83D\uDCCA إحصائيات الردود", callback_data: "reply_stats_all" }],
+      [{ text: "\uD83D\uDCE4 تصدير (JSON)", callback_data: "reply_export" }, { text: "\uD83D\uDCE5 استيراد", callback_data: "reply_import" }],
+    ],
+  },
+};
+
+// القائمة الرئيسية الجديدة: أهم إجراءين + الفئات
+function arMainKeyboard(active, inactive) {
+  const catBtn = (key) => {
+    const c = AR_CATEGORIES[key];
+    return { text: `${c.icon} ${c.name}`, callback_data: `reply_cat_${key}` };
+  };
+  return {
+    inline_keyboard: [
+      [{ text: "\u2795 إضافة رد جديد", callback_data: "reply_add" }, { text: `\uD83D\uDCCB ردودك (${active + inactive})`, callback_data: "reply_list" }],
+      [catBtn("manage")],
+      [catBtn("style")],
+      [catBtn("limits")],
+      [catBtn("data")],
+      [{ text: "\uD83C\uDFE0 الرئيسية", callback_data: "home" }],
+    ],
+  };
+}
+
 export async function showReplies(bot2, chatId, userId) {
-  const { getUserReplies, repliesMenuKeyboard } = _deps;
+  const { getUserReplies } = _deps;
   const replies = getUserReplies(userId);
   const active = replies.filter((r) => r.isActive).length;
   const inactive = replies.length - active;
   await bot2.sendMessage(
     chatId,
-    `⚙️ *إدارة الردود التلقائية*\n\n📊 الإجمالي: ${replies.length} رد\n✅ نشط: ${active} | ❌ معطّل: ${inactive}\n\nالردود تُطبَّق على رسائل واتساب تلقائياً.\nيمكنك إضافة ردود نصية، صور، ملفات، أو بالذكاء الاصطناعي.`,
-    {
-      parse_mode: "Markdown",
-      reply_markup: repliesMenuKeyboard(active, inactive)
-    }
+    `⚙️ *الردود التلقائية*\n\n` +
+    `📊 الإجمالي: *${replies.length}* رد — ✅ نشط: *${active}* | ❌ معطّل: *${inactive}*\n\n` +
+    `الردود تعمل تلقائياً على رسائل واتساب.\nأضف ردوداً نصية أو صوراً أو ملفات أو ردوداً بالذكاء الاصطناعي.\n\n` +
+    `👇 اختر قسماً:`,
+    { parse_mode: "Markdown", reply_markup: arMainKeyboard(active, inactive) }
+  );
+}
+
+// عرض فئة واحدة من فئات قائمة الردود
+async function showArCategory(bot2, chatId, userId, catKey) {
+  const cat = AR_CATEGORIES[catKey];
+  if (!cat) { await showReplies(bot2, chatId, userId); return; }
+  const rows = [...cat.rows.map((r) => [...r])];
+  rows.push([{ text: "\u25C0\uFE0F رجوع للردود", callback_data: "menu_replies" }, { text: "\uD83C\uDFE0 الرئيسية", callback_data: "home" }]);
+  await bot2.sendMessage(
+    chatId,
+    `${cat.icon} *${cat.name}*\n\n${cat.desc}:`,
+    { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
   );
 }
 
@@ -272,6 +349,11 @@ export async function handleAutoReplyCallback(bot2, chatId, userId, data) {
 
   if (data === "menu_replies") {
     await showReplies(bot2, chatId, userId);
+    return true;
+  }
+  // [AR-REBUILD] التنقل بين فئات القائمة الجديدة
+  if (data.startsWith("reply_cat_")) {
+    await showArCategory(bot2, chatId, userId, data.replace("reply_cat_", ""));
     return true;
   }
   if (data === "reply_add") {
@@ -365,13 +447,14 @@ export async function handleAutoReplyCallback(bot2, chatId, userId, data) {
       await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
       return true;
     }
+    // [AR-REBUILD] عرض الحد الحالي بجانب كل رد لسهولة المتابعة
     const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
+      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 24) + ` (${r.perUserLimit || 0}/8س)`,
       callback_data: "set_per_user_" + r.id
     }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
+    rows.push([{ text: "\u25C0\uFE0F رجوع", callback_data: "reply_cat_limits" }, { text: "🏠 الرئيسية", callback_data: "home" }]);
     await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
+      "👤 *حد كل شخص / 8 ساعات*\n\nيمنع تكرار نفس الرد لنفس الشخص أكثر من العدد المحدد خلال 8 ساعات.\n\nاختر الرد:",
       { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
     );
     return true;
@@ -420,13 +503,59 @@ export async function handleAutoReplyCallback(bot2, chatId, userId, data) {
     );
     return true;
   }
-  // [FIX_BUG003] reply_lang_filter — لم يكن موجوداً → كانت الضغطة تُفقد في الفراغ
+  // [AR-REBUILD] فلتر اللغة أصبح ميزة كاملة — كان مجرد رسالة "قيد التطوير"
+  // رغم أن التطبيق الفعلي (reply.langFilter) موجود ويعمل في محرك الردود.
   if (data === "reply_lang_filter") {
     const repliesFL = getUserReplies(userId);
-    const activeFL = repliesFL.filter((r) => r.isActive).length;
+    if (repliesFL.length === 0) {
+      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
+      return true;
+    }
+    const langLabel = (lf) => lf === "arabic" ? "🇸🇦" : lf === "english" ? "🇬🇧" : "🌐";
+    const rows = repliesFL.slice(0, 15).map((r) => [{
+      text: `${langLabel(r.langFilter)} ${r.trigger.slice(0, 28)}`,
+      callback_data: "set_lang_" + r.id
+    }]);
+    rows.push([{ text: "\u25C0\uFE0F رجوع", callback_data: "reply_cat_limits" }, { text: "🏠 الرئيسية", callback_data: "home" }]);
     await bot2.sendMessage(chatId,
-      "🔜 *فلتر اللغة*\n\nهذه الميزة قيد التطوير. يمكنك ضبط اللغة من حقل `langFilter` عند استيراد الردود بصيغة JSON.",
-      { parse_mode: "Markdown", reply_markup: repliesMenuKeyboard(activeFL, repliesFL.length - activeFL) }
+      "🔤 *فلتر اللغة*\n\nيجعل الرد يعمل فقط إذا كانت رسالة المرسل بلغة معينة.\n\n🇸🇦 = عربي فقط | 🇬🇧 = إنجليزي فقط | 🌐 = كل اللغات\n\nاختر الرد:",
+      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
+    );
+    return true;
+  }
+  if (data.startsWith("set_lang_") && !data.startsWith("set_lang_val_")) {
+    const replyIdFL = data.replace("set_lang_", "");
+    const repliesFL2 = getUserReplies(userId);
+    const replyFL = repliesFL2.find((r) => r.id === replyIdFL);
+    if (!replyFL) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
+    await bot2.sendMessage(chatId,
+      `🔤 *فلتر اللغة*\n\nالرد: "${replyFL.trigger.slice(0, 30)}"\nالفلتر الحالي: ${replyFL.langFilter === "arabic" ? "عربي فقط" : replyFL.langFilter === "english" ? "إنجليزي فقط" : "كل اللغات"}\n\nاختر الفلتر الجديد:`,
+      { parse_mode: "Markdown", reply_markup: { inline_keyboard: [
+        [{ text: "🇸🇦 عربي فقط", callback_data: `set_lang_val_${replyIdFL}_arabic` }],
+        [{ text: "🇬🇧 إنجليزي فقط", callback_data: `set_lang_val_${replyIdFL}_english` }],
+        [{ text: "🌐 كل اللغات (إزالة الفلتر)", callback_data: `set_lang_val_${replyIdFL}_none` }],
+        [{ text: "\u25C0\uFE0F رجوع", callback_data: "reply_lang_filter" }]
+      ] } }
+    );
+    return true;
+  }
+  if (data.startsWith("set_lang_val_")) {
+    const partsFL = data.replace("set_lang_val_", "");
+    const lastUnderscore = partsFL.lastIndexOf("_");
+    const replyIdFL2 = partsFL.slice(0, lastUnderscore);
+    const langVal = partsFL.slice(lastUnderscore + 1);
+    const repliesFL3 = getUserReplies(userId);
+    const replyFL2 = repliesFL3.find((r) => r.id === replyIdFL2);
+    if (!replyFL2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
+    replyFL2.langFilter = langVal === "none" ? null : langVal;
+    inMemoryDB.autoReplies.set(userId, repliesFL3);
+    if (_deps.persistReplies) _deps.persistReplies();
+    await bot2.sendMessage(chatId,
+      `✅ *تم ضبط فلتر اللغة!*\n\nالرد: "${replyFL2.trigger.slice(0, 30)}"\nالفلتر: ${langVal === "arabic" ? "🇸🇦 عربي فقط" : langVal === "english" ? "🇬🇧 إنجليزي فقط" : "🌐 كل اللغات"}\n\n💾 محفوظ بشكل دائم.`,
+      { parse_mode: "Markdown", reply_markup: { inline_keyboard: [
+        [{ text: "🔤 فلتر رد آخر", callback_data: "reply_lang_filter" }],
+        [{ text: "\u25C0\uFE0F رجوع للحدود", callback_data: "reply_cat_limits" }, { text: "🏠 الرئيسية", callback_data: "home" }]
+      ] } }
     );
     return true;
   }
@@ -468,812 +597,6 @@ export async function handleAutoReplyCallback(bot2, chatId, userId, data) {
     await bot2.sendMessage(chatId,
       `✅ *تم النسخ!*\n\nالمفتاح: "نسخة — ${replyDUP.trigger.slice(0, 28)}"\n⚠️ الحالة: معطّل — فعّله من القائمة`,
       { parse_mode: "Markdown", reply_markup: repliesMenuKeyboard(freshActive, freshReplies.length - freshActive) }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
-    );
-    return true;
-  }
-  // PATCH_PER_USER_LIMIT_FIX_APPLIED
-  if (data === "reply_per_user_limit") {
-    const repliesPU = _deps.getUserReplies(userId);
-    if (repliesPU.length === 0) {
-      await bot2.sendMessage(chatId, "❌ لا توجد ردود.");
-      return true;
-    }
-    const rows = repliesPU.slice(0, 15).map((r) => [{
-      text: (r.isActive ? "✅" : "❌") + " " + r.trigger.slice(0, 30),
-      callback_data: "set_per_user_" + r.id
-    }]);
-    rows.push([{ text: "🏠 الرئيسية", callback_data: "home" }]);
-    await bot2.sendMessage(chatId,
-      "👤 *حد كل شخص / 8 ساعات*\n\nاختر الرد:",
-      { parse_mode: "Markdown", reply_markup: { inline_keyboard: rows } }
-    );
-    return true;
-  }
-  if (data.startsWith("set_per_user_")) {
-    const replyIdPU = data.replace("set_per_user_", "");
-    const repliesPU2 = _deps.getUserReplies(userId);
-    const replyPU2 = repliesPU2.find((r) => r.id === replyIdPU);
-    if (!replyPU2) { await bot2.sendMessage(chatId, "❌ الرد غير موجود"); return true; }
-    const { setState: stPU, cancelKeyboard: ckPU } = _deps;
-    stPU(userId, "awaiting_reply_per_user_limit", { limitReplyId: replyIdPU });
-    await bot2.sendMessage(chatId,
-      `👤 *حد كل شخص / 8 ساعات*\n\nالرد: "${replyPU2.trigger.slice(0,30)}"\nالحد الحالي: ${replyPU2.perUserLimit || 0}\n\nأرسل الرقم الجديد (0 = بلا حد):`,
-      { parse_mode: "Markdown", reply_markup: ckPU() }
     );
     return true;
   }
@@ -1842,10 +1165,14 @@ export async function handleAutoReplyTextInput(bot2, chatId, userId, text, state
       return true;
     }
     reply.perUserLimit = limitVal;
+    // [AR-REBUILD] إصلاح حد 8 ساعات: كان التعديل في الذاكرة فقط ويضيع عند إعادة
+    // التشغيل — الآن نثبّته في الخريطة ونحفظه للقرص عبر persistReplies
+    _deps.inMemoryDB.autoReplies.set(userId, replies);
+    if (_deps.persistReplies) _deps.persistReplies();
     clearState(userId);
     await bot2.sendMessage(
       chatId,
-      `✅ *تم تحديث الحد!*\n\nالرد: "${reply.trigger.slice(0, 30)}"\nالحد الجديد: ${limitVal === 0 ? "بلا حد" : limitVal + " مرة / 8 ساعات"}`,
+      `✅ *تم تحديث الحد!*\n\nالرد: "${reply.trigger.slice(0, 30)}"\nالحد الجديد: ${limitVal === 0 ? "بلا حد" : limitVal + " مرة / 8 ساعات"}\n\n💾 الإعداد محفوظ — يبقى حتى بعد إعادة تشغيل البوت.`,
       { parse_mode: "Markdown", reply_markup: repliesMenuKeyboard(replies.filter((r) => r.isActive).length, replies.filter((r) => !r.isActive).length) }
     );
     return true;
@@ -1868,6 +1195,8 @@ export async function handleAutoReplyTextInput(bot2, chatId, userId, text, state
     }
     replyDL3.dailyLimit = limitValDL;
     _deps.inMemoryDB.autoReplies.set(userId, repliesDL3);
+    // [AR-REBUILD] الحد اليومي أيضاً كان لا يُحفظ للقرص
+    if (_deps.persistReplies) _deps.persistReplies();
     clearState(userId);
     await bot2.sendMessage(
       chatId,

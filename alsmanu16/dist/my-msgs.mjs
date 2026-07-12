@@ -381,7 +381,8 @@ export async function handleMyMsgsCallback(bot2, chatId, userId, data) {
     );
     return;
   }
-  if (data.startsWith("mymsgs_show_")) {
+  // [MSGS-REBUILD] استثناء cod/codes من الالتقاط العام — لها معالجات خاصة أدناه
+  if (data.startsWith("mymsgs_show_") && data !== "mymsgs_show_cod" && data !== "mymsgs_show_codes") {
     const feature = data.replace("mymsgs_show_", "");
     const sub = myMsgsFeatureSubMenu(s, feature);
     if (sub) {

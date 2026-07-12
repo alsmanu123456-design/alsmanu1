@@ -57,6 +57,8 @@ export async function handleCallback(bot, query) {
     data === 'code_parts_done' ||
     data.startsWith('set_per_user_') ||
     data.startsWith('set_daily_') ||
+    data.startsWith('set_lang_') || // [AR-REBUILD] فلتر اللغة الجديد
+
     data.startsWith('dup_reply_') ||
     data === 'morph_done' ||
     data === 'morph_add_edit'
