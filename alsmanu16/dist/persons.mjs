@@ -1,6 +1,17 @@
 let _deps = {};
 export function setDeps(d) { _deps = d; }
 
+// [LINK-REBUILD 2026-07-12] نفس إصلاح المجموعات: دعم مفاتيح الأرقام المتعددة
+function _findSock(inMemoryDB, userId) {
+  if (!inMemoryDB?.sessions) return null;
+  const direct = inMemoryDB.sessions.get(userId) || inMemoryDB.sessions.get(`sess_${userId}`);
+  if (direct) return direct;
+  for (const [k, v] of inMemoryDB.sessions.entries()) {
+    if (String(k).startsWith(`${userId}_`) && v) return v;
+  }
+  return null;
+}
+
 export async function handlePersonsCallback(bot2, chatId, userId, data) {
   const { getUser, saveUser, setState, cancelKeyboard, personsMenuKeyboard, personPickerKeyboard,
     contactsListKeyboard, personChatKeyboard, personSettingsKeyboard, getContacts, getPersonSettings, inMemoryDB } = _deps;
@@ -165,7 +176,7 @@ async function handlePersonPicker(bot2, chatId, userId, data) {
 
 async function handlePersonPicFromJid(bot2, chatId, userId, jid) {
   const { inMemoryDB } = _deps;
-  const sock = inMemoryDB.sessions.get(userId);
+  const sock = _findSock(inMemoryDB, userId);
   if (!sock) { await bot2.sendMessage(chatId, "\u274C \u0631\u0628\u0637 \u0648\u0627\u062A\u0633\u0627\u0628 \u0623\u0648\u0644\u0627\u064B"); return; }
   const num = jid.replace(/[^0-9]/g, "");
   const targetJid = `${num}@s.whatsapp.net`;
@@ -182,7 +193,7 @@ async function handlePersonPicFromJid(bot2, chatId, userId, jid) {
 
 async function handlePersonStatusFromJid(bot2, chatId, userId, jid) {
   const { inMemoryDB } = _deps;
-  const sock = inMemoryDB.sessions.get(userId);
+  const sock = _findSock(inMemoryDB, userId);
   if (!sock) { await bot2.sendMessage(chatId, "\u274C \u0631\u0628\u0637 \u0648\u0627\u062A\u0633\u0627\u0628 \u0623\u0648\u0644\u0627\u064B"); return; }
   const num = jid.replace(/[^0-9]/g, "");
   const targetJid = `${num}@s.whatsapp.net`;

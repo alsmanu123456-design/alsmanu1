@@ -1,10 +1,23 @@
 let _deps = {};
 export function setDeps(d) { _deps = d; }
 
+// [LINK-REBUILD 2026-07-12] إصلاح جذري: كان القسم يقرأ الجلسة بمفتاح userId
+// المباشر فقط، بينما جلسات الأرقام المتعددة تُخزَّن بمفتاح userId_+رقم —
+// فكانت كل الأزرار تعرض "اربط واتساب أولاً" رغم أن الرقم مربوط فعلاً.
+function _findSock(inMemoryDB, userId) {
+  if (!inMemoryDB?.sessions) return null;
+  const direct = inMemoryDB.sessions.get(userId) || inMemoryDB.sessions.get(`sess_${userId}`);
+  if (direct) return direct;
+  for (const [k, v] of inMemoryDB.sessions.entries()) {
+    if (String(k).startsWith(`${userId}_`) && v) return v;
+  }
+  return null;
+}
+
 export async function handleGroupsCallback(bot2, chatId, userId, data) {
   const { getUser, setState, cancelKeyboard, inMemoryDB } = _deps;
   const user = getUser(userId);
-  const sock = inMemoryDB.sessions.get(userId);
+  const sock = _findSock(inMemoryDB, userId);
   if (data === "menu_groups" || data === "groups_list") return false;
   if (data === "groups_create") {
     if (!sock) { await bot2.sendMessage(chatId, "\u274C \u0631\u0628\u0637 \u0648\u0627\u062A\u0633\u0627\u0628 \u0623\u0648\u0644\u0627\u064B"); return true; }

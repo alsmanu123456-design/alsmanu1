@@ -64,7 +64,7 @@ function _parseTime(text) {
 const _INTERVALS = { "يومي": 86400000, "اسبوعي": 604800000, "أسبوعي": 604800000, "شهري": 2592000000, daily: 86400000, weekly: 604800000, monthly: 2592000000 };
 
 export async function handleScheduleText(bot2, msg) {
-  const { getUser, saveUser, setState, clearState, getState, cancelKeyboard, scheduleMenuKeyboard } = _deps;
+  const { getUser, saveUser, setState, clearState, getState, cancelKeyboard } = _deps;
   if (!getState) return false;
   const userId = String(msg.from?.id || "");
   const chatId = msg.chat.id;
@@ -73,7 +73,7 @@ export async function handleScheduleText(bot2, msg) {
   const text = String(msg.text || "").trim();
   if (text === "إلغاء" || text === "/cancel") {
     clearState?.(userId);
-    await bot2.sendMessage(chatId, "✅ تم الإلغاء.", { reply_markup: scheduleMenuKeyboard?.() });
+    await bot2.sendMessage(chatId, "✅ تم الإلغاء.", { reply_markup: _schKeyboard(getUser(userId).scheduledMessages) });
     return true;
   }
   const data = st.data || {};
@@ -119,7 +119,7 @@ export async function handleScheduleText(bot2, msg) {
     saveUser(userId, { scheduledMessages: list });
     clearState?.(userId);
     const date = new Date(item.sendAt).toLocaleString("ar-SA", { timeZone: "Asia/Riyadh", hour12: false });
-    await bot2.sendMessage(chatId, `✅ *تمت الجدولة بنجاح!*\n\n📱 المستلم: +${item.jid.split("@")[0]}\n📅 الموعد: ${date}\n💬 "${text.slice(0, 60)}"`, { parse_mode: "Markdown", reply_markup: scheduleMenuKeyboard?.() });
+    await bot2.sendMessage(chatId, `✅ *تمت الجدولة بنجاح!*\n\n📱 المستلم: +${item.jid.split("@")[0]}\n📅 الموعد: ${date}\n💬 "${text.slice(0, 60)}"`, { parse_mode: "Markdown", reply_markup: _schKeyboard(getUser(userId).scheduledMessages) });
     return true;
   }
 
@@ -170,13 +170,16 @@ export async function handleScheduleText(bot2, msg) {
     saveUser(userId, { scheduledMessages: list });
     clearState?.(userId);
     const date = new Date(item.sendAt).toLocaleString("ar-SA", { timeZone: "Asia/Riyadh", hour12: false });
-    await bot2.sendMessage(chatId, `✅ *تم إنشاء الرسالة المتكررة!*\n\n📱 المستلم: +${item.jid.split("@")[0]}\n📅 أول إرسال: ${date}`, { parse_mode: "Markdown", reply_markup: scheduleMenuKeyboard?.() });
+    await bot2.sendMessage(chatId, `✅ *تم إنشاء الرسالة المتكررة!*\n\n📱 المستلم: +${item.jid.split("@")[0]}\n📅 أول إرسال: ${date}`, { parse_mode: "Markdown", reply_markup: _schKeyboard(getUser(userId).scheduledMessages) });
     return true;
   }
   return false;
 }
 
-// ─── [SCHED-FIX] حلقة الإرسال الفعلية (كانت مفقودة تماماً) ────────────────
+// ─── [SCHED-REBUILD 2026-07-12] حلقة الإرسال الفعلية ─────────────────────
+// إصلاح خطأ حرج: getAllUsers() تعيد "مصفوفة" لكن الكود القديم كان يستخدم
+// Object.keys() عليها فيحصل على فهارس (0,1,2...) بدلاً من معرّفات المستخدمين —
+// النتيجة: الرسائل المجدولة لم تكن تُرسَل إطلاقاً.
 let _loopTimer = null;
 export function startScheduleLoop(bot2) {
   if (_loopTimer) return;
@@ -185,8 +188,11 @@ export function startScheduleLoop(bot2) {
       const { getAllUsers, getUser, saveUser, inMemoryDB } = _deps;
       if (!getAllUsers || !inMemoryDB) return;
       const now = Date.now();
-      const users = getAllUsers() || {};
-      for (const userId of Object.keys(users)) {
+      const _all = getAllUsers() || [];
+      const _ids = Array.isArray(_all)
+        ? _all.map((u) => String(u.telegramId)).filter(Boolean)
+        : Object.keys(_all);
+      for (const userId of _ids) {
         const user = getUser(userId);
         const list = user.scheduledMessages || [];
         let changed = false;
@@ -231,17 +237,35 @@ export function startScheduleLoop(bot2) {
   }, 30000);
 }
 
+// [SCHED-REBUILD] قائمة الجدولة الجديدة — تنقّل أوضح: إنشاء / متابعة / إدارة
+function _schKeyboard(scheduled) {
+  const pending = (scheduled || []).filter((m) => m.status === "pending").length;
+  return {
+    inline_keyboard: [
+      [{ text: "\u2795 جدولة رسالة", callback_data: "schedule_add" }, { text: "\uD83D\uDD01 رسالة متكررة", callback_data: "schedule_recurring" }],
+      [{ text: `\uD83D\uDCCB رسائلك المجدولة (${pending})`, callback_data: "schedule_list" }],
+      [{ text: "\uD83D\uDDD1\uFE0F حذف رسالة", callback_data: "schedule_delete" }, { text: "\uD83D\uDCCA الإحصائيات", callback_data: "schedule_stats" }],
+      [{ text: "\uD83C\uDFE0 الرئيسية", callback_data: "home" }],
+    ],
+  };
+}
+
 export async function handleScheduleCallback(bot2, chatId, userId, data) {
-  const { getUser, saveUser, setState, inMemoryDB, cancelKeyboard, scheduleMenuKeyboard } = _deps;
+  const { getUser, saveUser, setState, inMemoryDB, cancelKeyboard } = _deps;
   const user = getUser(userId);
   const scheduled = user.scheduledMessages || [];
   if (data === "menu_schedule") {
     const active = scheduled.filter((m) => m.status === "pending").length;
     const sent = scheduled.filter((m) => m.status === "sent").length;
+    const failed = scheduled.filter((m) => m.status === "failed").length;
+    const sockOk = !!_findSock(inMemoryDB, userId);
     await bot2.sendMessage(
       chatId,
-      `\u{1F4C5} *\u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644\u0629*\n\n\u23F3 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631: ${active}\n\u2705 \u062A\u0645 \u0625\u0631\u0633\u0627\u0644\u0647\u0627: ${sent}\n\u{1F4CB} \u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A: ${scheduled.length}`,
-      { parse_mode: "Markdown", reply_markup: scheduleMenuKeyboard() }
+      `\u{1F4C5} *\u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644\u0629*\n\n` +
+      `${sockOk ? "\uD83D\uDFE2 \u0648\u0627\u062A\u0633\u0627\u0628 \u0645\u062A\u0635\u0644" : "\uD83D\uDD34 \u0648\u0627\u062A\u0633\u0627\u0628 \u063A\u064A\u0631 \u0645\u062A\u0635\u0644 \u2014 \u0627\u0631\u0628\u0637 \u0631\u0642\u0645\u0643 \u0623\u0648\u0644\u0627\u064B"}\n\n` +
+      `\u23F3 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631: *${active}*\n\u2705 \u0645\u064F\u0631\u0633\u064E\u0644\u0629: *${sent}*${failed ? `\n\u274C \u0641\u0634\u0644\u062A: *${failed}*` : ""}\n\n` +
+      `\u23F0 \u0627\u0644\u062A\u0648\u0642\u064A\u062A: \u0627\u0644\u0633\u0639\u0648\u062F\u064A\u0629 (UTC+3) \u2014 \u062A\u064F\u0641\u062D\u0635 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0643\u0644 30 \u062B\u0627\u0646\u064A\u0629`,
+      { parse_mode: "Markdown", reply_markup: _schKeyboard(scheduled) }
     );
     return true;
   }
@@ -261,7 +285,7 @@ export async function handleScheduleCallback(bot2, chatId, userId, data) {
   }
   if (data === "schedule_list") {
     if (scheduled.length === 0) {
-      await bot2.sendMessage(chatId, "\u{1F4CB} \u0644\u0627 \u062A\u0648\u062C\u062F \u0631\u0633\u0627\u0626\u0644 \u0645\u062C\u062F\u0648\u0644\u0629 \u0628\u0639\u062F.", { reply_markup: scheduleMenuKeyboard() });
+      await bot2.sendMessage(chatId, "\u{1F4CB} \u0644\u0627 \u062A\u0648\u062C\u062F \u0631\u0633\u0627\u0626\u0644 \u0645\u062C\u062F\u0648\u0644\u0629 \u0628\u0639\u062F.", { reply_markup: _schKeyboard(scheduled) });
       return true;
     }
     const lines = scheduled.slice(-10).reverse().map((m, i) => {
@@ -275,7 +299,7 @@ export async function handleScheduleCallback(bot2, chatId, userId, data) {
     await bot2.sendMessage(
       chatId,
       `\uD83D\uDCCB *\u0631\u0633\u0627\u0626\u0644 \u0645\u062C\u062F\u0648\u0644\u0629*\n\u23F3 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631: *${pendingCount}* | \uD83D\uDCCA \u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A: *${scheduled.length}*\n\u23F0 \u0627\u0644\u062A\u0648\u0642\u064A\u062A: \u0627\u0644\u0633\u0639\u0648\u062F\u064A\u0629 (UTC+3)\n\n${lines}`,
-      { parse_mode: "Markdown", reply_markup: scheduleMenuKeyboard() }
+      { parse_mode: "Markdown", reply_markup: _schKeyboard(scheduled) }
     );
     return true;
   }
@@ -296,13 +320,16 @@ export async function handleScheduleCallback(bot2, chatId, userId, data) {
     return true;
   }
   if (data.startsWith("schedule_del_")) {
+    let _remaining;
     if (data === "schedule_del_all") {
-      saveUser(userId, { scheduledMessages: scheduled.filter((m) => m.status !== "pending") });
-      await bot2.sendMessage(chatId, "\u2705 \u062A\u0645 \u062D\u0630\u0641 \u062C\u0645\u064A\u0639 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631");
+      _remaining = scheduled.filter((m) => m.status !== "pending");
+      saveUser(userId, { scheduledMessages: _remaining });
+      await bot2.sendMessage(chatId, "\u2705 \u062A\u0645 \u062D\u0630\u0641 \u062C\u0645\u064A\u0639 \u0627\u0644\u0631\u0633\u0627\u0626\u0644 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631", { reply_markup: _schKeyboard(_remaining) });
     } else {
       const id = data.replace("schedule_del_", "");
-      saveUser(userId, { scheduledMessages: scheduled.filter((m) => m.id !== id) });
-      await bot2.sendMessage(chatId, "\u2705 \u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0631\u0633\u0627\u0644\u0629");
+      _remaining = scheduled.filter((m) => m.id !== id);
+      saveUser(userId, { scheduledMessages: _remaining });
+      await bot2.sendMessage(chatId, "\u2705 \u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0631\u0633\u0627\u0644\u0629", { reply_markup: _schKeyboard(_remaining) });
     }
     return true;
   }
@@ -313,7 +340,7 @@ export async function handleScheduleCallback(bot2, chatId, userId, data) {
     await bot2.sendMessage(
       chatId,
       `\u{1F4CA} *\u0625\u062D\u0635\u0627\u0626\u064A\u0627\u062A \u0627\u0644\u062C\u062F\u0648\u0644\u0629*\n\n\u2705 \u0645\u064F\u0631\u0633\u064E\u0644\u0629: ${sent}\n\u23F3 \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631: ${pending}\n\u274C \u0641\u0634\u0644\u062A: ${failed}\n\u{1F4CB} \u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A: ${scheduled.length}`,
-      { parse_mode: "Markdown", reply_markup: scheduleMenuKeyboard() }
+      { parse_mode: "Markdown", reply_markup: _schKeyboard(scheduled) }
     );
     return true;
   }
