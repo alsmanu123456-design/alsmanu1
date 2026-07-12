@@ -46,6 +46,10 @@ const DEFAULTS = {
   ttsCmd: "/\u0635\u0648\u062A",
   locateCmd: "/locate",
   locateEnabled: false,
+  getCmd: "/get",
+  getEnabled: true,
+  getBatchSize: 15,
+  getIntervalMinutes: 120,
 };
 
 export function getMyMsgsSettings(user) {
@@ -148,7 +152,7 @@ export const MYMSGS_CATEGORIES = {
   },
   tools: {
     icon: "\uD83D\uDEE0\uFE0F", name: "\u0623\u062F\u0648\u0627\u062A \u0627\u0644\u0645\u062D\u0627\u062F\u062B\u0629",
-    features: ["pic", "gm", "copy", "del", "statuscp", "statusas"],
+    features: ["pic", "gm", "get", "copy", "del", "statuscp", "statusas"],
   },
   services: {
     icon: "\uD83C\uDF10", name: "\u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0648\u062E\u062F\u0645\u0627\u062A",
@@ -162,7 +166,7 @@ export const MYMSGS_CATEGORIES = {
 
 // اسم مختصر لكل ميزة يظهر داخل الفئة
 const FEATURE_LABELS = {
-  pic: "\uD83D\uDCF8 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644", gm: "\uD83D\uDC65 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621",
+  pic: "\uD83D\uDCF8 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644", gm: "\uD83D\uDC65 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621", get: "\u2795 \u0633\u062D\u0628 \u0648\u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0623\u0639\u0636\u0627\u0621",
   copy: "\uD83D\uDD04 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644", img: "\uD83D\uDDBC\uFE0F \u0628\u062D\u062B \u0635\u0648\u0631",
   vid: "\uD83C\uDFAC \u0641\u064A\u062F\u064A\u0648 \u064A\u0648\u062A\u064A\u0648\u0628", tiktok: "\uD83D\uDCF1 \u062A\u064A\u0643 \u062A\u0648\u0643",
   song: "\uD83C\uDFB5 \u0623\u063A\u0627\u0646\u064A", film: "\uD83C\uDFA5 \u062A\u0646\u0632\u064A\u0644 \u0641\u064A\u0644\u0645",
@@ -178,7 +182,7 @@ const FEATURE_LABELS = {
 // قراءة حالة تفعيل ميزة من الإعدادات (بمراعاة الافتراضيات)
 export function _featureEnabled(s, key) {
   const map = {
-    pic: s.profilePicEnabled, gm: s.exportMembersEnabled, copy: s.copyEnabled,
+    pic: s.profilePicEnabled, gm: s.exportMembersEnabled, get: s.getEnabled ?? true, copy: s.copyEnabled,
     img: s.imgEnabled, vid: s.vidEnabled, tiktok: s.tiktokEnabled, song: s.songEnabled,
     film: s.filmEnabled, ai: s.aiEnabled, aiimg: s.aiImgEnabled, del: s.delEnabled,
     statuscp: s.statusCopyEnabled, statusas: s.statusAutoSave ?? false, spam: s.spamEnabled ?? false,
@@ -239,6 +243,7 @@ export function myMsgsFeatureSubMenu(s, feature) {
   const map = {
     pic:      { en: s.profilePicEnabled,         cmd: s.profilePicCmd,    name: "\uD83D\uDCF8 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644",   tog: "mymsgs_toggle_pic",       edit: "mymsgs_edit_pic_cmd" },
     gm:       { en: s.exportMembersEnabled,       cmd: s.exportMembersCmd, name: "\uD83D\uDC65 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621",    tog: "mymsgs_toggle_gm",        edit: "mymsgs_edit_gm_cmd" },
+    get:      { en: s.getEnabled ?? true,          cmd: s.getCmd ?? "/get", name: "\u2795 \u0633\u062D\u0628 \u0648\u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u0623\u0639\u0636\u0627\u0621", tog: "mymsgs_toggle_get", edit: null },
     copy:     { en: s.copyEnabled,               cmd: s.copyCmd,          name: "\uD83D\uDD04 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644",    tog: "mymsgs_toggle_copy",      edit: "mymsgs_edit_copy_cmd" },
     img:      { en: s.imgEnabled,                cmd: s.imgCmd,           name: "\uD83D\uDDBC\uFE0F \u0628\u062D\u062B \u0635\u0648\u0631",          tog: "mymsgs_toggle_img",       edit: "mymsgs_edit_img_cmd" },
     vid:      { en: s.vidEnabled,                cmd: s.vidCmd,           name: "\uD83C\uDFAC \u0641\u064A\u062F\u064A\u0648 \u064A\u0648\u062A\u064A\u0648\u0628",     tog: "mymsgs_toggle_vid",       edit: "mymsgs_edit_vid_cmd" },
@@ -271,6 +276,7 @@ export function myMsgsFeatureSubMenu(s, feature) {
   const _featureDescs = {
     pic:      `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd}\` \u0641\u064A \u0623\u064A \u0645\u062D\u0627\u062F\u062B\u0629 \u0648\u0627\u062A\u0633\u0627\u0628 \u0644\u062C\u0644\u0628 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644.`,
     gm:       `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd}\` \u062F\u0627\u062E\u0644 \u0645\u062C\u0645\u0648\u0639\u0629 \u0644\u062A\u0635\u062F\u064A\u0631 \u0623\u0631\u0642\u0627\u0645 \u062C\u0645\u064A\u0639 \u0627\u0644\u0623\u0639\u0636\u0627\u0621 \u0643\u0645\u0644\u0641 \u0646\u0635\u064A.`,
+    get:      `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\`${feat.cmd} 50\` \u0644\u062D\u0641\u0638 \u0627\u0644\u0623\u0639\u0636\u0627\u0621\u060C \u0648\`${feat.cmd} me\` \u0644\u0625\u0636\u0627\u0641\u062A\u0647\u0645 \u0648\u0627\u062D\u062F\u0627\u064B \u0648\u0627\u062D\u062F\u0627\u064B \u0645\u0639 \u062A\u062E\u0637\u064A \u0627\u0644\u0645\u0642\u064A\u062F.\n\u062D\u062C\u0645 \u0627\u0644\u062F\u0641\u0639\u0629: *${s.getBatchSize ?? 15}* \u2014 \u0627\u0644\u0641\u0627\u0635\u0644: *${s.getIntervalMinutes ?? 120}* \u062F\u0642\u064A\u0642\u0629.`,
     copy:     `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0631\u062F \u0639\u0644\u0649 \u0623\u064A \u0631\u0633\u0627\u0644\u0629 \u0628\u0640 \`${feat.cmd}\` \u0644\u0625\u0639\u0627\u062F\u0629 \u0625\u0631\u0633\u0627\u0644\u0647\u0627 \u0628\u062F\u0648\u0646 \u0639\u0644\u0627\u0645\u0629 "\u0645\u062D\u0648\u0651\u0644\u0629 \u0645\u0646".`,
     img:      `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd} \u0643\u0644\u0645\u0629 \u0639\u062F\u062F\` \u0644\u0644\u0628\u062D\u062B \u0639\u0646 \u0635\u0648\u0631.\n\u270F\uFE0F \u0645\u062B\u0627\u0644: \`${feat.cmd} \u0642\u0637\u0637 5\``,
     vid:      `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd} \u0643\u0644\u0645\u0629 \u0639\u062F\u062F\` \u0644\u062A\u0646\u0632\u064A\u0644 \u0641\u064A\u062F\u064A\u0648\u0647\u0627\u062A \u064A\u0648\u062A\u064A\u0648\u0628.\n\u270F\uFE0F \u0645\u062B\u0627\u0644: \`${feat.cmd} \u0642\u0637\u0629 2\``,
@@ -306,6 +312,10 @@ export function myMsgsFeatureSubMenu(s, feature) {
     [{ text: feat.en ? "\uD83D\uDD34 \u0625\u064A\u0642\u0627\u0641" : "\uD83D\uDFE2 \u062A\u0634\u063A\u064A\u0644", callback_data: feat.tog }],
   ];
   if (feat.edit) _rows.push([{ text: `\u270F\uFE0F \u062A\u063A\u064A\u064A\u0631 \u0627\u0644\u0623\u0645\u0631: ${feat.cmd}`, callback_data: feat.edit }]);
+  if (feature === "get") {
+    _rows.push([{ text: `\uD83D\uDC65 \u062D\u062C\u0645 \u0627\u0644\u062F\u0641\u0639\u0629: ${s.getBatchSize ?? 15}`, callback_data: "mymsgs_get_batch" }]);
+    _rows.push([{ text: `\u23F1\uFE0F \u0627\u0644\u0641\u0627\u0635\u0644: ${s.getIntervalMinutes ?? 120} \u062F\u0642\u064A\u0642\u0629`, callback_data: "mymsgs_get_interval" }]);
+  }
   _rows.push([_backBtn, { text: "\uD83C\uDFE0 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629", callback_data: "home" }]);
   return {
     text: `\u2699\uFE0F *${feat.name}*\n\n${_featDesc}\n\n\u0627\u0644\u0623\u0645\u0631: \`${feat.cmd}\`\n\u0627\u0644\u062D\u0627\u0644\u0629: ${feat.en ? "\uD83D\uDFE2 \u0645\u064F\u0641\u0639\u064E\u0651\u0644" : "\uD83D\uDD34 \u0645\u064F\u0639\u0637\u064E\u0651\u0644"}`,
@@ -399,6 +409,30 @@ export async function handleMyMsgsCallback(bot2, chatId, userId, data) {
   if (data === "mymsgs_toggle_gm") {
     const ns = saveMyMsgsSettings(userId, { exportMembersEnabled: !s.exportMembersEnabled });
     await bot2.sendMessage(chatId, ns.exportMembersEnabled ? `\u2705 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621 \u0645\u0641\u0639\u0651\u0644 \u2014 \u0623\u0631\u0633\u0644 *${ns.exportMembersCmd}* \u062F\u0627\u062E\u0644 \u0645\u062C\u0645\u0648\u0639\u0629` : `\u274C \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621 \u0645\u0639\u0637\u0651\u0644`, { parse_mode: "Markdown", reply_markup: ((() => { try { const sub = myMsgsFeatureSubMenu(ns, "gm"); return sub ? sub.keyboard : myMsgsMenuKeyboard(ns); } catch(e) { return myMsgsMenuKeyboard(ns); } })()) }); return;
+  }
+  if (data === "mymsgs_toggle_get") {
+    const ns = saveMyMsgsSettings(userId, { getEnabled: !(s.getEnabled ?? true) });
+    const sub = myMsgsFeatureSubMenu(ns, "get");
+    await bot2.sendMessage(chatId, ns.getEnabled ? "تم تشغيل ميزة /get." : "تم إيقاف ميزة /get.", { reply_markup: sub?.keyboard || myMsgsMenuKeyboard(ns) });
+    return;
+  }
+  if (data === "mymsgs_get_batch") {
+    const choices = [1, 5, 10, 15, 25, 50];
+    const current = Number(s.getBatchSize) || 15;
+    const next = choices[(choices.indexOf(current) + 1) % choices.length] || choices[0];
+    const ns = saveMyMsgsSettings(userId, { getBatchSize: next });
+    const sub = myMsgsFeatureSubMenu(ns, "get");
+    await bot2.sendMessage(chatId, `تم تغيير حجم دفعة /get إلى ${next} عضو.`, { reply_markup: sub?.keyboard || myMsgsMenuKeyboard(ns) });
+    return;
+  }
+  if (data === "mymsgs_get_interval") {
+    const choices = [1, 5, 15, 30, 60, 120, 360];
+    const current = Number(s.getIntervalMinutes) || 120;
+    const next = choices[(choices.indexOf(current) + 1) % choices.length] || choices[0];
+    const ns = saveMyMsgsSettings(userId, { getIntervalMinutes: next });
+    const sub = myMsgsFeatureSubMenu(ns, "get");
+    await bot2.sendMessage(chatId, `تم تغيير فاصل دفعات /get إلى ${next} دقيقة.`, { reply_markup: sub?.keyboard || myMsgsMenuKeyboard(ns) });
+    return;
   }
   if (data === "mymsgs_toggle_copy") {
     const ns = saveMyMsgsSettings(userId, { copyEnabled: !s.copyEnabled });

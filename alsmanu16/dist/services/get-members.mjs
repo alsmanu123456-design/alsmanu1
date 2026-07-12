@@ -100,35 +100,40 @@ async function fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger) {
   return participants;
 }
 
-// ── إضافة دفعة أرقام مع معالجة النتائج ───────────────────────────────
-// يُرجع { added, failed, invites } — invites = أرقام رفضت الإضافة المباشرة
+// ── إضافة الأرقام واحداً واحداً مع تخطي أي عضو مرفوض ────────────────
+// الطلب الفردي يمنع رقم عليه خصوصية/قيد من إسقاط الدفعة كلها.
+// لا تُرسل روابط دعوة؛ فقط تُسجّل النتيجة وتتابع الرقم التالي.
 async function addBatch(sock, groupId, numbers, logger) {
-  const jids = numbers.map(numToJid);
-  let result = [];
-  try {
-    result = await sock.groupParticipantsUpdate(groupId, jids, "add");
-  } catch (e) {
-    logger?.warn?.({ e: e?.message }, "[/get] groupParticipantsUpdate add failed");
-    // فشل جماعي — اعتبر الجميع فاشلين
-    return { added: 0, failed: numbers.length, invites: [] };
+  const stats = { added: 0, existing: 0, restricted: 0, privacy: 0, failed: 0 };
+
+  for (let index = 0; index < numbers.length; index++) {
+    const number = numbers[index];
+    const targetJid = numToJid(number);
+    try {
+      const result = await sock.groupParticipantsUpdate(groupId, [targetJid], "add");
+      const item = Array.isArray(result) ? result[0] : result;
+      const status = String(item?.status || item?.code || "");
+      const errorText = String(item?.error || item?.message || item?.content?.[0]?.attrs?.error || "").toLowerCase();
+
+      if (status === "200" || (!status && !errorText)) stats.added++;
+      else if (status === "409" || errorText.includes("already")) stats.existing++;
+      else if (status === "403" || errorText.includes("privacy")) stats.privacy++;
+      else if (errorText.includes("account_reachout_restricted") || errorText.includes("reachout")) stats.restricted++;
+      else stats.failed++;
+    } catch (e) {
+      const errorText = String(e?.message || e || "").toLowerCase();
+      if (errorText.includes("account_reachout_restricted") || errorText.includes("reachout")) stats.restricted++;
+      else if (errorText.includes("privacy") || errorText.includes("403")) stats.privacy++;
+      else if (errorText.includes("already") || errorText.includes("409")) stats.existing++;
+      else stats.failed++;
+      logger?.warn?.({ number, e: e?.message }, "[/get] single participant add skipped");
+    }
+
+    // فاصل خفيف بين الطلبات الفردية؛ لا تتوقف بسبب فشل أي عضو.
+    if (index + 1 < numbers.length) await new Promise((resolve) => setTimeout(resolve, 1200));
   }
-  let added = 0;
-  let failed = 0;
-  const invites = [];
-  // baileys يُرجع مصفوفة نتائج لكل رقم مع status code
-  for (const r of Array.isArray(result) ? result : []) {
-    const status = String(r?.status || r?.code || "");
-    if (status === "200") added++;
-    else if (status === "403" || status === "409") {
-      // 403: إعدادات الخصوصية تمنع الإضافة المباشرة → يحتاج دعوة
-      // 409: العضو موجود بالفعل
-      if (status === "403") invites.push(r?.jid);
-      failed++;
-    } else failed++;
-  }
-  // إن لم يُرجِع باستيليز تفاصيل، اعتبر النجاح مبدئياً
-  if (added === 0 && failed === 0) added = numbers.length;
-  return { added, failed, invites };
+
+  return stats;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -159,7 +164,8 @@ export function startAddJob(deps, userId, groupId) {
       logger?.warn?.({ userId }, "[/get] no active sock for scheduled add — will retry next tick");
       return; // نُبقي المؤقّت؛ ربما عاد الاتصال لاحقاً
     }
-    const batch = job.remaining.slice(0, GET_BATCH_SIZE);
+    const batchSize = Math.max(1, Math.min(50, Number(job.batchSize) || GET_BATCH_SIZE));
+    const batch = job.remaining.slice(0, batchSize);
     const res = await addBatch(sock, groupId, batch, logger);
     // أزل الدفعة من المتبقّي (نجحت أو فشلت — لا نعيد المحاولة بلا نهاية)
     job.remaining = job.remaining.slice(batch.length);
@@ -171,13 +177,15 @@ export function startAddJob(deps, userId, groupId) {
     try {
       const selfJid = `${userId}@s.whatsapp.net`;
       const remaining = job.remaining.length;
+      const skipped = res.restricted + res.privacy + res.failed;
       if (remaining > 0) {
+        const intervalMinutes = Math.round((Number(job.intervalMs) || GET_BATCH_INTERVAL_MS) / 60000);
         await sock.sendMessage(selfJid, {
-          text: `⏳ *مهمة /get*\n✅ أُضيفت دفعة: ${res.added} عضو\n📊 المتبقّي: ${remaining} — الدفعة التالية بعد ساعتين.`,
+          text: `مهمة /get\nتمت إضافة: ${res.added}\nموجودون مسبقاً: ${res.existing}\nتم تخطي المقيد/الخصوصية/الفاشل: ${skipped}\nالمتبقي: ${remaining}\nالدفعة التالية بعد ${intervalMinutes} دقيقة.`,
         });
       } else {
         await sock.sendMessage(selfJid, {
-          text: `🎉 *اكتملت مهمة /get!*\n✅ إجمالي المُضاف: ${job.addedTotal} عضو.`,
+          text: `اكتملت مهمة /get\nإجمالي المضاف: ${job.addedTotal} عضو.`,
         });
       }
     } catch {}
@@ -189,8 +197,10 @@ export function startAddJob(deps, userId, groupId) {
     }
   };
 
-  // شغّل أول دفعة فوراً ثم كرّر كل ساعتين
-  const intervalId = setInterval(runBatch, GET_BATCH_INTERVAL_MS);
+  // شغّل أول دفعة فوراً ثم كرّر وفق الفاصل المحفوظ في إعداد المهمة.
+  const initialJob = (getUser(userId).getJobs || {})[groupId] || {};
+  const intervalMs = Math.max(60_000, Number(initialJob.intervalMs) || GET_BATCH_INTERVAL_MS);
+  const intervalId = setInterval(runBatch, intervalMs);
   activeTimers.set(key, intervalId);
   // أول دفعة تُنفَّذ فوراً (بدون انتظار ساعتين)
   runBatch().catch((e) => logger?.warn?.({ e: e?.message }, "[/get] first batch failed"));
@@ -245,8 +255,11 @@ export function restoreAllAddJobs(deps) {
 // ════════════════════════════════════════════════════════════════════
 export async function handleGetCommand(deps, ctx, arg) {
   const { getUser, saveUser, inMemoryDB, logger } = deps;
-  const { sock, userId, jid, isGroup } = ctx;
+  const { sock, userId, jid, isGroup, getSettings = {} } = ctx;
   const sub = (arg || "").trim();
+  const configuredBatchSize = Math.max(1, Math.min(50, Number(getSettings.getBatchSize) || GET_BATCH_SIZE));
+  const configuredIntervalMinutes = Math.max(1, Math.min(1440, Number(getSettings.getIntervalMinutes) || 120));
+  const configuredIntervalMs = configuredIntervalMinutes * 60 * 1000;
 
   // ── /get بلا وسيط → دليل التعليمات ──────────────────────────────
   if (sub === "") {
@@ -287,27 +300,33 @@ export async function handleGetCommand(deps, ctx, arg) {
     // ≤ 50: إضافة فورية دفعة واحدة
     if (toAdd.length <= GET_INSTANT_LIMIT) {
       await sock.sendMessage(jid, { text: `➕ جارٍ إضافة ${toAdd.length} عضو...` });
-      // نضيف على دفعات صغيرة (15) لتفادي حظر واتساب حتى في الوضع الفوري
-      let added = 0, invitesAll = [];
-      for (let i = 0; i < toAdd.length; i += GET_BATCH_SIZE) {
-        const batch = toAdd.slice(i, i + GET_BATCH_SIZE);
+      // كل طلب يحتوي عضواً واحداً؛ المقيد يُتخطى وتستمر بقية الأرقام.
+      const totals = { added: 0, existing: 0, restricted: 0, privacy: 0, failed: 0 };
+      for (let i = 0; i < toAdd.length; i += configuredBatchSize) {
+        const batch = toAdd.slice(i, i + configuredBatchSize);
         const res = await addBatch(sock, jid, batch, logger);
-        added += res.added;
-        invitesAll = invitesAll.concat(res.invites || []);
-        if (i + GET_BATCH_SIZE < toAdd.length) await new Promise((r) => setTimeout(r, 4000));
+        for (const key of Object.keys(totals)) totals[key] += res[key] || 0;
+        if (i + configuredBatchSize < toAdd.length) await new Promise((r) => setTimeout(r, 4000));
       }
-      const inviteNote = invitesAll.length ? `\n📨 ${invitesAll.length} رقم يحتاج دعوة يدوية (إعدادات خصوصية).` : "";
-      await sock.sendMessage(jid, { text: `✅ تم إضافة ${added} من ${toAdd.length} عضو.${inviteNote}` });
+      await sock.sendMessage(jid, {
+        text: `انتهت محاولة الإضافة واحداً واحداً.\nتمت الإضافة: ${totals.added}\nموجودون مسبقاً: ${totals.existing}\nتعذر بسبب خصوصية العضو: ${totals.privacy}\nتم تخطي تقييد التواصل: ${totals.restricted}\nفشل آخر: ${totals.failed}\nالإجمالي: ${toAdd.length}`,
+      });
       return;
     }
 
     // > 50: جدولة تدريجية 15 كل ساعتين
     const jobs = user.getJobs || {};
-    jobs[jid] = { remaining: toAdd, total: toAdd.length, addedTotal: 0, startedAt: Date.now() };
+    jobs[jid] = {
+      remaining: toAdd,
+      total: toAdd.length,
+      addedTotal: 0,
+      batchSize: configuredBatchSize,
+      intervalMs: configuredIntervalMs,
+      startedAt: Date.now(),
+    };
     saveUser(userId, { getJobs: jobs });
-    const hours = Math.ceil(toAdd.length / GET_BATCH_SIZE) * 2;
     await sock.sendMessage(jid, {
-      text: `📥 *بدأت مهمة إضافة تدريجية*\n👥 العدد: ${toAdd.length} عضو\n⚙️ الوتيرة: ${GET_BATCH_SIZE} عضو كل ساعتين (لحماية رقمك من الحظر)\n⏱️ المدة التقديرية: ~${hours} ساعة\n\nالدفعة الأولى الآن...`,
+      text: `بدأت مهمة إضافة تدريجية.\nالعدد: ${toAdd.length}\nالدفعة: ${configuredBatchSize} عضو\nالفاصل: ${configuredIntervalMinutes} دقيقة\nستتم محاولة كل عضو منفرداً وتخطي المرفوض تلقائياً.\n\nالدفعة الأولى الآن...`,
     });
     startAddJob(deps, userId, jid);
     return;
