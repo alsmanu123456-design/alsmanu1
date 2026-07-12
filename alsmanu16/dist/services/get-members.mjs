@@ -25,16 +25,52 @@ const activeTimers = new Map();
 
 // ── أدوات مساعدة ────────────────────────────────────────────────────
 
-// تطبيع الأرقام: أرقام فقط، تجاهُل معرّفات @lid (لا يمكن إضافتها كجهة اتصال)
-function extractNumbersFromParticipants(participants) {
+// يحوّل JID واتساب إلى رقم دولي نظيف صالح للإضافة.
+// لا نقبل قيمة LID نفسها كرقم لأنها معرّف داخلي وليست رقم هاتف.
+function cleanPhoneFromJid(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.endsWith("@lid")) return "";
+  const num = raw.split("@")[0].split(":")[0].replace(/\D/g, "");
+  return num.length >= 8 && num.length <= 15 ? num : "";
+}
+
+// نفس طريقة /gm في قراءة meta.participants، مع خطوة إضافية ضرورية:
+// أعضاء واتساب الحديثون يظهرون غالباً كـ @lid؛ نحوّل LID إلى PN الحقيقي
+// من مخزن Baileys بدلاً من تجاهلهم (وهو سبب أن /get كان يرجع صفراً).
+async function extractNumbersFromParticipants(sock, participants, logger) {
   const out = [];
   const seen = new Set();
+  const lidMapping = sock?.signalRepository?.lidMapping;
+
   for (const p of participants || []) {
-    const raw = p?.id || p?.jid || "";
-    if (!raw || raw.endsWith("@lid")) continue; // @lid مجهول الرقم — لا يُضاف
-    const num = String(raw).split("@")[0].replace(/\D/g, "");
-    if (num.length < 8) continue;
-    if (seen.has(num)) continue;
+    const primary = p?.id || p?.jid || "";
+    // إصدارات Baileys المختلفة قد تضع رقم الهاتف في أحد هذه الحقول.
+    const candidates = [
+      p?.phoneNumber,
+      p?.pn,
+      p?.participantPn,
+      p?.phone,
+      p?.jid,
+      p?.id,
+    ];
+
+    let num = "";
+    for (const candidate of candidates) {
+      num = cleanPhoneFromJid(candidate);
+      if (num) break;
+    }
+
+    // إن كان العضو LID ولا يوجد PN جاهز، استخدم محوّل Baileys الرسمي.
+    if (!num && String(primary).endsWith("@lid") && typeof lidMapping?.getPNForLID === "function") {
+      try {
+        const pnJid = await lidMapping.getPNForLID(primary);
+        num = cleanPhoneFromJid(pnJid);
+      } catch (e) {
+        logger?.debug?.({ lid: primary, e: e?.message }, "[/get] failed to map LID to phone number");
+      }
+    }
+
+    if (!num || seen.has(num)) continue;
     seen.add(num);
     out.push(num);
   }
@@ -238,8 +274,9 @@ export async function handleGetCommand(deps, ctx, arg) {
       return;
     }
     // استبعد أعضاء المجموعة الحاليين لتفادي محاولات مكرّرة
+    const existingParticipants = await fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger);
     const existing = new Set(
-      extractNumbersFromParticipants(await fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger))
+      await extractNumbersFromParticipants(sock, existingParticipants, logger)
     );
     const toAdd = pool.filter((n) => !existing.has(n));
     if (toAdd.length === 0) {
@@ -283,10 +320,15 @@ export async function handleGetCommand(deps, ctx, arg) {
       await sock.sendMessage(jid, { text: "⚠️ أرسل `/get <عدد>` داخل المجموعة التي تريد سحب الأرقام منها." });
       return;
     }
+    // نجلب الأعضاء بنفس طريقة /gm من groupMetadata ثم نحوّل LID إلى PN صحيح.
     const participants = await fetchGroupParticipants(sock, jid, inMemoryDB, userId, logger);
-    const allNums = extractNumbersFromParticipants(participants);
+    const allNums = await extractNumbersFromParticipants(sock, participants, logger);
     if (allNums.length === 0) {
-      await sock.sendMessage(jid, { text: "❌ تعذّر قراءة أعضاء هذه المجموعة." });
+      await sock.sendMessage(jid, {
+        text: participants.length > 0
+          ? "❌ تم جلب أعضاء القروب لكن تعذّر تحويل معرّفات LID إلى أرقام هاتف. أعد تشغيل البوت ثم جرّب /gm وبعده /get مرة أخرى."
+          : "❌ تعذّر قراءة أعضاء هذه المجموعة.",
+      });
       return;
     }
     const picked = allNums.slice(0, count);
