@@ -92,9 +92,10 @@ export async function handleText(bot2, msg) {
         const testRes = await fetch(`https://api.telegram.org/bot${newToken}/getMe`);
         const testJson = await testRes.json();
         if (!testJson.ok) {
+          // نص عادي لأن وصف Telegram قد يحتوي رموز Markdown مثل _ أو [
           await bot2.sendMessage(chatId,
-            `❌ *التوكن غير صالح*\n\nردّ Telegram: ${testJson.description || "خطأ مجهول"}`,
-            { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
+            `❌ التوكن غير صالح\n\nردّ Telegram: ${testJson.description || "خطأ مجهول"}`,
+            { reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
           );
           return true;
         }
@@ -105,25 +106,28 @@ export async function handleText(bot2, msg) {
           mkdirSync("data", { recursive: true });
           writeFileSync("data/telegram_token.json", JSON.stringify({ token: newToken, updatedAt: new Date().toISOString() }), "utf8");
         } catch (writeErr) {
+          // رسالة نصية عادية: رسالة النظام قد تحتوي رموزاً تكسر Markdown.
           await bot2.sendMessage(chatId,
-            `❌ *فشل حفظ التوكن — إعادة التشغيل مُلغاة*\n\nالخطأ: ${writeErr?.message || "خطأ في الكتابة"}\n\nتأكد من صلاحيات مجلد \`data/\` وحاول مجدداً.`,
-            { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
+            `❌ فشل حفظ التوكن — إعادة التشغيل مُلغاة\n\nالخطأ: ${writeErr?.message || "خطأ في الكتابة"}\n\nتأكد من صلاحيات مجلد data/ وحاول مجدداً.`,
+            { reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
           );
           return true;
         }
         process.env.TELEGRAM_BOT_TOKEN = newToken;
+        // لا تستخدم Markdown هنا: username/first_name بيانات ديناميكية وقد تحتوي
+        // شرطات سفلية أو رموز كيانات، وهذا كان يحوّل نجاح التحقق إلى خطأ مضلل.
         await bot2.sendMessage(chatId,
-          `✅ *تم التحقق وحفظ التوكن بنجاح!*\n\n` +
+          `✅ تم التحقق وحفظ التوكن بنجاح!\n\n` +
           `🤖 البوت الجديد: @${botInfo.username || "?"} (${botInfo.first_name || "?"})\n\n` +
-          `🔄 سيُعاد تشغيل البوت خلال 3 ثوانٍ بالتوكن الجديد...`,
-          { parse_mode: "Markdown" }
+          `🔄 سيُعاد تشغيل البوت خلال 3 ثوانٍ بالتوكن الجديد...`
         );
         // إعادة التشغيل بعد 3 ثوانٍ لإرسال الرسالة أولاً
         setTimeout(() => { process.exit(0); }, 3000);
       } catch (fetchErr) {
+        // نص عادي حتى لا يصبح خطأ تنسيق Telegram نفسه سبباً لخطأ ثانٍ.
         await bot2.sendMessage(chatId,
-          `❌ *فشل التحقق من التوكن*\n\n${fetchErr?.message || "خطأ في الشبكة"}`,
-          { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
+          `❌ فشل الاتصال بخدمة Telegram للتحقق من التوكن\n\n${fetchErr?.message || "خطأ في الشبكة"}`,
+          { reply_markup: { inline_keyboard: [[{ text: "🔑 حاول مجدداً", callback_data: "dev_token" }]] } }
         );
       }
       return true;
