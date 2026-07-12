@@ -127,29 +127,112 @@ export function saveMyMsgsSettings(userId, settings) {
   return updated;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [MSGS-REBUILD 2026-07-12] إعادة بناء قسم "رسائلي":
+// القائمة القديمة كانت لائحة مسطّحة من +25 زراً بلا تصنيف — تنقّل مرهق وصعب.
+// الآن مقسّمة إلى فئات منطقية (تحميل، ذكاء اصطناعي، أدوات، خدمات، صوت) مع
+// أزرار رجوع واضحة في كل مستوى، وعدّاد يوضح كم ميزة مفعّلة في كل فئة.
+// (صورة البروفايل التلقائية محفوظة كما هي — ميزة مرجعية).
+// كل معالجات الأوامر الفعلية (في الحزمة) تبقى تعمل دون تغيير.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// تعريف الفئات: كل فئة لها اسم وأيقونة وقائمة مفاتيح ميزاتها + دالة قراءة التفعيل
+export const MYMSGS_CATEGORIES = {
+  media: {
+    icon: "\uD83D\uDCE5", name: "\u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0648\u0627\u0644\u0648\u0633\u0627\u0626\u0637",
+    features: ["img", "vid", "tiktok", "song", "film", "sticker"],
+  },
+  ai: {
+    icon: "\uD83E\uDD16", name: "\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A",
+    features: ["ai", "aiimg"],
+  },
+  tools: {
+    icon: "\uD83D\uDEE0\uFE0F", name: "\u0623\u062F\u0648\u0627\u062A \u0627\u0644\u0645\u062D\u0627\u062F\u062B\u0629",
+    features: ["pic", "gm", "copy", "del", "statuscp", "statusas"],
+  },
+  services: {
+    icon: "\uD83C\uDF10", name: "\u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0648\u062E\u062F\u0645\u0627\u062A",
+    features: ["weather", "translate", "wiki", "prayer", "currency", "news", "joke", "fortune", "locate"],
+  },
+  voice: {
+    icon: "\uD83C\uDFA4", name: "\u0627\u0644\u0635\u0648\u062A",
+    features: ["stt", "tts"],
+  },
+};
+
+// اسم مختصر لكل ميزة يظهر داخل الفئة
+const FEATURE_LABELS = {
+  pic: "\uD83D\uDCF8 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644", gm: "\uD83D\uDC65 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621",
+  copy: "\uD83D\uDD04 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644", img: "\uD83D\uDDBC\uFE0F \u0628\u062D\u062B \u0635\u0648\u0631",
+  vid: "\uD83C\uDFAC \u0641\u064A\u062F\u064A\u0648 \u064A\u0648\u062A\u064A\u0648\u0628", tiktok: "\uD83D\uDCF1 \u062A\u064A\u0643 \u062A\u0648\u0643",
+  song: "\uD83C\uDFB5 \u0623\u063A\u0627\u0646\u064A", film: "\uD83C\uDFA5 \u062A\u0646\u0632\u064A\u0644 \u0641\u064A\u0644\u0645",
+  ai: "\uD83E\uDD16 \u0630\u0643\u0627\u0621 \u0627\u0635\u0637\u0646\u0627\u0639\u064A", aiimg: "\uD83C\uDFA8 \u062A\u0648\u0644\u064A\u062F \u0635\u0648\u0631\u0629 AI",
+  del: "\uD83D\uDDD1\uFE0F \u062D\u0630\u0641 \u0627\u0644\u0631\u0633\u0627\u0626\u0644", statuscp: "\uD83D\uDCF2 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u062D\u0627\u0644\u0629",
+  statusas: "\uD83D\uDCBE \u062D\u0641\u0638 \u062A\u0644\u0642\u0627\u0626\u064A \u0644\u0644\u062D\u0627\u0644\u0627\u062A", spam: "\uD83D\uDCA3 \u0633\u0628\u0627\u0645/\u0641\u0644\u0648\u062F",
+  weather: "\uD83C\uDF24\uFE0F \u0637\u0642\u0633", translate: "\uD83C\uDF10 \u062A\u0631\u062C\u0645\u0629", joke: "\uD83D\uDE02 \u0646\u0643\u062A\u0629",
+  fortune: "\u2728 \u062D\u0638\u0643 \u0627\u0644\u064A\u0648\u0645", wiki: "\uD83D\uDCDA \u0648\u064A\u0643\u064A\u0628\u064A\u062F\u064A\u0627", prayer: "\uD83D\uDD4C \u0645\u0648\u0627\u0642\u064A\u062A \u0627\u0644\u0635\u0644\u0627\u0629",
+  currency: "\uD83D\uDCB1 \u062A\u062D\u0648\u064A\u0644 \u0639\u0645\u0644\u0629", sticker: "\uD83C\uDFAD \u0633\u062A\u064A\u0643\u0631", news: "\uD83D\uDCF0 \u0623\u062E\u0628\u0627\u0631",
+  locate: "\uD83D\uDD75\uFE0F \u062A\u062A\u0628\u0639 \u0627\u0644\u0645\u0648\u0642\u0639", stt: "\uD83C\uDFA4 \u0635\u0648\u062A\u2190\u0646\u0635", tts: "\uD83D\uDD0A \u0646\u0635\u2190\u0635\u0648\u062A",
+};
+
+// قراءة حالة تفعيل ميزة من الإعدادات (بمراعاة الافتراضيات)
+export function _featureEnabled(s, key) {
+  const map = {
+    pic: s.profilePicEnabled, gm: s.exportMembersEnabled, copy: s.copyEnabled,
+    img: s.imgEnabled, vid: s.vidEnabled, tiktok: s.tiktokEnabled, song: s.songEnabled,
+    film: s.filmEnabled, ai: s.aiEnabled, aiimg: s.aiImgEnabled, del: s.delEnabled,
+    statuscp: s.statusCopyEnabled, statusas: s.statusAutoSave ?? false, spam: s.spamEnabled ?? false,
+    weather: s.weatherEnabled ?? false, translate: s.translateEnabled ?? false, joke: s.jokeEnabled ?? false,
+    fortune: s.fortuneEnabled ?? false, wiki: s.wikiEnabled ?? false, prayer: s.prayerEnabled ?? false,
+    currency: s.currencyEnabled ?? false, sticker: s.stickerEnabled ?? false, news: s.newsEnabled ?? false,
+    locate: s.locateEnabled ?? false, stt: s.sttEnabled ?? true, tts: s.ttsEnabled ?? true,
+  };
+  return !!map[key];
+}
+
+// القائمة الرئيسية الجديدة: فئات فقط + أدوات عامة
 export function myMsgsMenuKeyboard(s) {
-  const f = (en, name, cd) => ({ text: `${en ? "\uD83D\uDFE2" : "\uD83D\uDD34"} ${name}`, callback_data: cd });
+  const catRow = (key) => {
+    const cat = MYMSGS_CATEGORIES[key];
+    const active = cat.features.filter((k) => _featureEnabled(s, k)).length;
+    return { text: `${cat.icon} ${cat.name}  (${active}/${cat.features.length})`, callback_data: `mymsgs_cat_${key}` };
+  };
   return {
     inline_keyboard: [
-      [f(s.profilePicEnabled, "\uD83D\uDCF8 \u0635\u0648\u0631\u0629 \u0627\u0644\u0628\u0631\u0648\u0641\u0627\u064A\u0644", "mymsgs_show_pic"), f(s.exportMembersEnabled, "\uD83D\uDC65 \u062A\u0635\u062F\u064A\u0631 \u0627\u0644\u0623\u0639\u0636\u0627\u0621", "mymsgs_show_gm")],
-      [f(s.copyEnabled, "\uD83D\uDD04 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0625\u0631\u0633\u0627\u0644", "mymsgs_show_copy"), f(s.imgEnabled, "\uD83D\uDDBC\uFE0F \u0628\u062D\u062B \u0635\u0648\u0631", "mymsgs_show_img")],
-      [f(s.vidEnabled, "\uD83C\uDFAC \u0641\u064A\u062F\u064A\u0648 \u064A\u0648\u062A\u064A\u0648\u0628", "mymsgs_show_vid"), f(s.tiktokEnabled, "\uD83D\uDCF1 \u062A\u064A\u0643 \u062A\u0648\u0643", "mymsgs_show_tiktok")],
-      [f(s.songEnabled, "\uD83C\uDFB5 \u0623\u063A\u0627\u0646\u064A", "mymsgs_show_song"), f(s.filmEnabled, "\uD83C\uDFA5 \u062A\u0646\u0632\u064A\u0644 \u0641\u064A\u0644\u0645", "mymsgs_show_film")],
-      [f(s.aiEnabled, "\uD83E\uDD16 \u0630\u0643\u0627\u0621 \u0627\u0635\u0637\u0646\u0627\u0639\u064A", "mymsgs_show_ai"), f(s.aiImgEnabled, "\uD83C\uDFA8 \u062A\u0648\u0644\u064A\u062F \u0635\u0648\u0631\u0629 AI", "mymsgs_show_aiimg")],
-      [f(s.delEnabled, "\uD83D\uDDD1\uFE0F \u062D\u0630\u0641 \u0627\u0644\u0631\u0633\u0627\u0626\u0644", "mymsgs_show_del"), f(s.statusCopyEnabled, "\uD83D\uDCF2 \u0625\u0631\u0633\u0627\u0644 \u0627\u0644\u062D\u0627\u0644\u0629", "mymsgs_show_statuscp")],
-      [f(s.statusAutoSave ?? false, "\uD83D\uDCBE \u062D\u0641\u0638 \u062A\u0644\u0642\u0627\u0626\u064A \u0644\u0644\u062D\u0627\u0644\u0627\u062A", "mymsgs_show_statusas")],
-      [f(s.spamEnabled ?? false, "\uD83D\uDCA3 \u0633\u0628\u0627\u0645/\u0641\u0644\u0648\u062F", "mymsgs_show_spam"), f(s.weatherEnabled ?? false, "\uD83C\uDF24\uFE0F \u0637\u0642\u0633", "mymsgs_show_weather")],
-      [f(s.translateEnabled ?? false, "\uD83C\uDF10 \u062A\u0631\u062C\u0645\u0629", "mymsgs_show_translate"), f(s.jokeEnabled ?? false, "\uD83D\uDE02 \u0646\u0643\u062A\u0629", "mymsgs_show_joke")],
-      [f(s.fortuneEnabled ?? false, "\u2728 \u062D\u0638\u0643 \u0627\u0644\u064A\u0648\u0645", "mymsgs_show_fortune"), f(s.wikiEnabled ?? false, "\uD83D\uDCDA \u0648\u064A\u0643\u064A\u0628\u064A\u062F\u064A\u0627", "mymsgs_show_wiki")],
-      [f(s.prayerEnabled ?? false, "\uD83D\uDD4C \u0645\u0648\u0627\u0642\u064A\u062A \u0627\u0644\u0635\u0644\u0627\u0629", "mymsgs_show_prayer"), f(s.currencyEnabled ?? false, "\uD83D\uDCB1 \u062A\u062D\u0648\u064A\u0644 \u0639\u0645\u0644\u0629", "mymsgs_show_currency")],
-      [f(s.stickerEnabled ?? false, "\uD83C\uDFAD \u0633\u062A\u064A\u0643\u0631", "mymsgs_show_sticker"), f(s.newsEnabled ?? false, "\uD83D\uDCF0 \u0623\u062E\u0628\u0627\u0631", "mymsgs_show_news")],
-      [f(s.locateEnabled ?? false, "\uD83D\uDD75\uFE0F \u062A\u062A\u0628\u0639 \u0627\u0644\u0645\u0648\u0642\u0639", "mymsgs_show_locate"), f(s.sttEnabled ?? true, "\uD83C\uDFA4 \u0635\u0648\u062A\u2190\u0646\u0635", "mymsgs_show_stt")],
-      [f(s.ttsEnabled ?? true, "\uD83D\uDD0A \u0646\u0635\u2190\u0635\u0648\u062A", "mymsgs_show_tts"), { text: "\uD83D\uDCCC \u0627\u0644\u0645\u064A\u0632\u0627\u062A \u0643\u0644\u0647\u0627", callback_data: "menu_mymsgs" }],
-      [{ text: "\u{1F517} \u0631\u0645\u0632 \u0631\u0628\u0637 \u0631\u0642\u0645", callback_data: "mymsgs_show_codes" }],
-      [{ text: "\u{1F512} \u0623\u062F\u0627\u0629 \u0627\u0644\u0645\u0637\u0648\u0631: \u0645\u0648\u0627\u0642\u0639 \u0645\u0624\u0642\u062A\u0629", callback_data: "mymsgs_show_sitegen" }],
-      [{ text: "\u{1F517} \u0631\u0645\u0632 \u0631\u0628\u0637 \u0631\u0642\u0645", callback_data: "mymsgs_show_cod" }, { text: "\uD83C\uDFE0 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629", callback_data: "home" }]
-    ]
+      [catRow("media")],
+      [catRow("ai")],
+      [catRow("tools")],
+      [catRow("services")],
+      [catRow("voice")],
+      [{ text: "\u26A1 \u0627\u0644\u0623\u0643\u0648\u0627\u062F \u0627\u0644\u062E\u0627\u0635\u0629", callback_data: "mymsgs_show_codes" }, { text: "\uD83D\uDD17 \u0631\u0628\u0637 \u0631\u0642\u0645", callback_data: "mymsgs_show_cod" }],
+      [{ text: "\uD83C\uDFE0 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629", callback_data: "home" }],
+    ],
   };
+}
+
+// لوحة فئة واحدة: أزرار ميزاتها + رجوع للقائمة الرئيسية
+export function myMsgsCategoryKeyboard(s, catKey) {
+  const cat = MYMSGS_CATEGORIES[catKey];
+  if (!cat) return myMsgsMenuKeyboard(s);
+  const dot = (k) => (_featureEnabled(s, k) ? "\uD83D\uDFE2" : "\uD83D\uDD34");
+  const rows = [];
+  for (let i = 0; i < cat.features.length; i += 2) {
+    const row = cat.features.slice(i, i + 2).map((k) => ({
+      text: `${dot(k)} ${FEATURE_LABELS[k] || k}`,
+      callback_data: `mymsgs_show_${k}`,
+    }));
+    rows.push(row);
+  }
+  rows.push([{ text: "\u25C0\uFE0F \u0631\u062C\u0648\u0639 \u0644\u0644\u0623\u0642\u0633\u0627\u0645", callback_data: "menu_mymsgs" }]);
+  return { inline_keyboard: rows };
+}
+
+// إيجاد الفئة التي تحتوي ميزة معيّنة (لزر الرجوع الذكي داخل السَّبمِنيو)
+export function _categoryOfFeature(featureKey) {
+  for (const [key, cat] of Object.entries(MYMSGS_CATEGORIES)) {
+    if (cat.features.includes(featureKey)) return key;
+  }
+  return null;
 }
 
 export function myMsgsFeatureSubMenu(s, feature) {
@@ -214,25 +297,53 @@ export function myMsgsFeatureSubMenu(s, feature) {
     locate:   `\uD83D\uDCCC *\u0643\u064A\u0641 \u062A\u0633\u062A\u062E\u062F\u0645\u0647\u0627:*\n\u0623\u0631\u0633\u0644 \`${feat.cmd} +\u0631\u0645\u0632\u0627\u0644\u062F\u0648\u0644\u0629\u0627\u0644\u0631\u0642\u0645\` \u0644\u062A\u062A\u0628\u0639 \u0645\u0648\u0642\u0639 \u0627\u0644\u0631\u0642\u0645.\n\u270F\uFE0F \u0645\u062B\u0627\u0644: \`${feat.cmd} +966501234567\`\n\u{1F512} \u064A\u0639\u0631\u0636 \u0627\u0644\u0645\u0648\u0642\u0639 + \u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0627\u0644\u0634\u0628\u0643\u0629 \u0648\u0627\u0644\u062F\u0648\u0644\u0629`,
   };
   const _featDesc = _featureDescs[feature] || "";
+  // [MSGS-REBUILD] زر رجوع ذكي: يعود لفئة الميزة إن وُجدت، وإلا للقائمة الرئيسية
+  const _cat = _categoryOfFeature(feature);
+  const _backBtn = _cat
+    ? { text: `\u25C0\uFE0F \u0631\u062C\u0648\u0639 \u0644\u0640 ${MYMSGS_CATEGORIES[_cat].name}`, callback_data: `mymsgs_cat_${_cat}` }
+    : { text: "\u25C0\uFE0F \u0631\u062C\u0648\u0639 \u0644\u0644\u0642\u0627\u0626\u0645\u0629", callback_data: "menu_mymsgs" };
+  const _rows = [
+    [{ text: feat.en ? "\uD83D\uDD34 \u0625\u064A\u0642\u0627\u0641" : "\uD83D\uDFE2 \u062A\u0634\u063A\u064A\u0644", callback_data: feat.tog }],
+  ];
+  if (feat.edit) _rows.push([{ text: `\u270F\uFE0F \u062A\u063A\u064A\u064A\u0631 \u0627\u0644\u0623\u0645\u0631: ${feat.cmd}`, callback_data: feat.edit }]);
+  _rows.push([_backBtn, { text: "\uD83C\uDFE0 \u0627\u0644\u0631\u0626\u064A\u0633\u064A\u0629", callback_data: "home" }]);
   return {
     text: `\u2699\uFE0F *${feat.name}*\n\n${_featDesc}\n\n\u0627\u0644\u0623\u0645\u0631: \`${feat.cmd}\`\n\u0627\u0644\u062D\u0627\u0644\u0629: ${feat.en ? "\uD83D\uDFE2 \u0645\u064F\u0641\u0639\u064E\u0651\u0644" : "\uD83D\uDD34 \u0645\u064F\u0639\u0637\u064E\u0651\u0644"}`,
-    keyboard: {
-      inline_keyboard: [
-        [{ text: feat.en ? "\uD83D\uDD34 \u0625\u064A\u0642\u0627\u0641" : "\uD83D\uDFE2 \u062A\u0634\u063A\u064A\u0644", callback_data: feat.tog }],
-        [{ text: `\u270F\uFE0F \u062A\u063A\u064A\u064A\u0631 \u0627\u0644\u0623\u0645\u0631: ${feat.cmd}`, callback_data: feat.edit }],
-        [{ text: "\u25C0\uFE0F \u0631\u062C\u0648\u0639 \u0644\u0644\u0642\u0627\u0626\u0645\u0629", callback_data: "menu_mymsgs" }]
-      ]
-    }
+    keyboard: { inline_keyboard: _rows }
   };
 }
 
 export async function handleMyMsgsMenu(bot2, chatId, userId) {
   const user = _deps.getUser(userId);
   const s = getMyMsgsSettings(user);
+  // [MSGS-REBUILD] شاشة رئيسية مبسّطة: تعرّف بالقسم ثم فئات منظّمة بدل لائحة طويلة
+  const totalActive = Object.values(MYMSGS_CATEGORIES)
+    .flatMap((c) => c.features)
+    .filter((k) => _featureEnabled(s, k)).length;
+  const totalFeatures = Object.values(MYMSGS_CATEGORIES).reduce((n, c) => n + c.features.length, 0);
   await bot2.sendMessage(
     chatId,
-    `\u{1F4E4} *\u0642\u0633\u0645 \u0631\u0633\u0627\u0626\u0644\u064A*\n\n\u0623\u0648\u0627\u0645\u0631 \u062A\u0631\u0633\u0644\u0647\u0627 \u0623\u0646\u062A \u0641\u064A \u0623\u064A \u0645\u062D\u0627\u062F\u062B\u0629 \u0648\u0627\u062A\u0633\u0627\u0628:\n\n\u{1F5BC}\uFE0F *${s.profilePicCmd}*\n\u064A\u0631\u0633\u0644 \u0635\u0648\u0631\u0629 \u0628\u0631\u0648\u0641\u0627\u064A\u0644 \u0627\u0644\u0634\u062E\u0635 \u0623\u0648 \u0627\u0644\u0645\u062C\u0645\u0648\u0639\u0629\n\n\u{1F465} *${s.exportMembersCmd}*\n(\u062F\u0627\u062E\u0644 \u0645\u062C\u0645\u0648\u0639\u0629) \u064A\u0631\u0633\u0644 \u0645\u0644\u0641 \u0628\u0643\u0644 \u0623\u0631\u0642\u0627\u0645 \u0627\u0644\u0623\u0639\u0636\u0627\u0621\n\n\u{1F501} *${s.copyCmd}*\n(\u0631\u062F\u0651 \u0639\u0644\u0649 \u0631\u0633\u0627\u0644\u0629) \u064A\u0639\u064A\u062F \u0625\u0631\u0633\u0627\u0644\u0647\u0627 \u0628\u062F\u0648\u0646 "\u0645\u062D\u0648\u0651\u0644\u0629"\n\n\u{1F5BC}\uFE0F *${s.imgCmd} \u0646\u0635 \u0639\u062F\u062F*\n\u064A\u0628\u062D\u062B \u0639\u0646 \u0635\u0648\u0631 \u2014 \u0645\u062B\u0627\u0644: \`${s.imgCmd} \u0643\u0644\u0628 5\`\n\n\u{1F3AC} *${s.vidCmd} \u0646\u0635 \u0639\u062F\u062F*\n\u064A\u064F\u0646\u0632\u0651\u0644 \u0641\u064A\u062F\u064A\u0648\u0647\u0627\u062A \u064A\u0648\u062A\u064A\u0648\u0628 \u2014 \u0645\u062B\u0627\u0644: \`${s.vidCmd} \u0642\u0637\u0629 2\`\n\n\u{1F4F1} *${s.tiktokCmd} \u0646\u0635 \u0639\u062F\u062F*\n\u064A\u0628\u062D\u062B \u0648\u064A\u0646\u0632\u0651\u0644 \u0645\u0646 \u062A\u064A\u0643 \u062A\u0648\u0643 (\u062D\u062A\u0649 20) \u2014 \u0645\u062B\u0627\u0644: \`${s.tiktokCmd} \u062A\u062D\u0634\u064A\u0634 \u0639\u0631\u0627\u0642\u064A 3\`\n\n\u{1F3B5} *${s.songCmd} \u0646\u0635 \u0639\u062F\u062F*\n\u064A\u064F\u0646\u0632\u0651\u0644 \u0623\u063A\u0627\u0646\u064A \u2014 \u0645\u062B\u0627\u0644: \`${s.songCmd} \u0641\u064A\u0631\u0648\u0632 2\`\n\n\u{1F916} *${s.aiCmd} \u0633\u0624\u0627\u0644\u0643*\n\u064A\u0631\u062F \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u2014 \u0645\u062B\u0627\u0644: \`${s.aiCmd} \u0645\u0627 \u0647\u0648 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A\`\n\n\u{1F5D1}\uFE0F *${s.delCmd} \u0639\u062F\u062F*\n\u064A\u062D\u0630\u0641 \u0622\u062E\u0631 N \u0631\u0633\u0627\u0644\u0629 \u0623\u0631\u0633\u0644\u062A\u0647\u0627 (\u0644\u0644\u062C\u0645\u064A\u0639) \u2014 \u0645\u062B\u0627\u0644: \`${s.delCmd} 5\`\n\n\u{1F3A8} *${s.aiImgCmd} \u0648\u0635\u0641*\n\u064A\u0648\u0644\u0651\u062F \u0635\u0648\u0631\u0629 \u0628\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u2014 \u0645\u062B\u0627\u0644: \`${s.aiImgCmd} \u063A\u0631\u0648\u0628 \u0627\u0644\u0634\u0645\u0633 \u0641\u0648\u0642 \u0627\u0644\u062C\u0628\u0627\u0644\`\n\n\u{1F3A5} *${s.filmCmd} \u0627\u0633\u0645 \u0627\u0644\u0641\u064A\u0644\u0645*\n\u064A\u0646\u0632\u0651\u0644 \u0641\u064A\u0644\u0645 \u0643\u0627\u0645\u0644 \u0645\u0646 \u064A\u0648\u062A\u064A\u0648\u0628 \u2014 \u0645\u062B\u0627\u0644: \`${s.filmCmd} inception\``,
+    `\u{1F4E4} *\u0642\u0633\u0645 \u0631\u0633\u0627\u0626\u0644\u064A*\n\n` +
+    `\u0623\u062F\u0648\u0627\u062A \u062A\u0643\u062A\u0628\u0647\u0627 \u0628\u0646\u0641\u0633\u0643 \u062F\u0627\u062E\u0644 \u0623\u064A \u0645\u062D\u0627\u062F\u062B\u0629 \u0648\u0627\u062A\u0633\u0627\u0628\u060c \u0645\u0631\u062A\u0651\u0628\u0629 \u0641\u064A \u0641\u0626\u0627\u062A \u0644\u062A\u0633\u0647\u064A\u0644 \u0627\u0644\u062A\u0646\u0642\u0644.\n\n` +
+    `\u2705 \u0627\u0644\u0645\u064F\u0641\u0639\u0651\u0644 \u062D\u0627\u0644\u064A\u0627\u064B: *${totalActive}* \u0645\u0646 *${totalFeatures}* \u0645\u064A\u0632\u0629\n\n` +
+    `\uD83D\uDC47 \u0627\u062E\u062A\u0631 \u0641\u0626\u0629 \u0644\u0639\u0631\u0636 \u0645\u064A\u0632\u0627\u062A\u0647\u0627:`,
     { parse_mode: "Markdown", reply_markup: myMsgsMenuKeyboard(s) }
+  );
+}
+
+// [MSGS-REBUILD] عرض ميزات فئة واحدة مع أزرارها وزر رجوع
+export async function handleMyMsgsCategory(bot2, chatId, userId, catKey) {
+  const user = _deps.getUser(userId);
+  const s = getMyMsgsSettings(user);
+  const cat = MYMSGS_CATEGORIES[catKey];
+  if (!cat) { await handleMyMsgsMenu(bot2, chatId, userId); return; }
+  const active = cat.features.filter((k) => _featureEnabled(s, k)).length;
+  await bot2.sendMessage(
+    chatId,
+    `${cat.icon} *${cat.name}*\n\n` +
+    `\u2705 \u0627\u0644\u0645\u064F\u0641\u0639\u0651\u0644: *${active}* \u0645\u0646 *${cat.features.length}*\n\n` +
+    `\uD83D\uDFE2 = \u0645\u064F\u0641\u0639\u0651\u0644\u0629   \uD83D\uDD34 = \u0645\u064F\u0639\u0637\u0651\u0644\u0629\n\u0627\u0636\u063A\u0637 \u0623\u064A \u0645\u064A\u0632\u0629 \u0644\u0636\u0628\u0637\u0647\u0627 \u0623\u0648 \u0645\u0639\u0631\u0641\u0629 \u0637\u0631\u064A\u0642\u0629 \u0627\u0633\u062A\u062E\u062F\u0627\u0645\u0647\u0627:`,
+    { parse_mode: "Markdown", reply_markup: myMsgsCategoryKeyboard(s, catKey) }
   );
 }
 
@@ -241,6 +352,11 @@ export async function handleMyMsgsCallback(bot2, chatId, userId, data) {
   const s = getMyMsgsSettings(user);
   if (data === "menu_mymsgs") {
     await handleMyMsgsMenu(bot2, chatId, userId);
+    return;
+  }
+  // [MSGS-REBUILD] التنقل بين الفئات
+  if (data.startsWith("mymsgs_cat_")) {
+    await handleMyMsgsCategory(bot2, chatId, userId, data.replace("mymsgs_cat_", ""));
     return;
   }
   // [NEW-FEATURE-SITEGEN] زر أداة المواقع المؤقتة داخل رسائلي — مقفول على المطوّر فقط
